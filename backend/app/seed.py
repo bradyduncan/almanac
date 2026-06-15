@@ -3,14 +3,14 @@
 Idempotent by contract (CLAUDE.md): re-running updates existing rows rather than
 duplicating, and never deletes drill_log / fact_review history.
 
-Each domain file has YAML frontmatter with:
-  - lessons:    ordered teaching units (title + prose body)
-  - activities: ordered tasks; kind == "quiz" carries prompt/choices/answer_index,
-                every other kind is a "confirm you did it" activity with instructions.
+Each domain file has YAML frontmatter with a `levels:` mapping (beginner / intermediate /
+advanced). Each level holds ordered `lessons` (title + prose body) and ordered
+`activities` (kind == "quiz" carries prompt/choices/answer_index; any other kind is a
+"confirm you did it" activity with instructions).
 
 Matching keys:
   - domain      -> slug
-  - lesson_fact -> (domain_id, order)
+  - lesson_fact -> (domain_id, level, order)
   - drill       -> (domain_id, title)
 
 Run: uv run python -m app.seed
@@ -28,21 +28,23 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
-from app.models import Domain, Drill, DrillKind, LessonFact, User
+from app.models import LEVEL_ORDER, Domain, Drill, DrillKind, LessonFact, Level, User
 
-# repo_root/content — seed.py lives at repo_root/backend/app/seed.py
 CONTENT_DIR = Path(__file__).resolve().parents[2] / "content"
 
 SEED_USER_ID = 1
 SEED_USER_HANDLE = "me"
 
 QUIZ_KIND = DrillKind.quiz.value
+LEVEL_NAMES = [lvl.value for lvl in LEVEL_ORDER]
 
 
 @dataclass
 class LessonSpec:
     title: str
     body: str
+    level: str
+    order: int
 
 
 @dataclass
@@ -50,6 +52,8 @@ class ActivitySpec:
     title: str
     kind: str
     est_minutes: int
+    level: str
+    order: int
     instructions: str = ""
     prompt: str | None = None
     choices: list[str] | None = None
@@ -67,7 +71,6 @@ class DomainSpec:
 
 
 def _parse_frontmatter(text: str, source: Path) -> dict:
-    """Extract the YAML block delimited by leading/closing '---' lines."""
     if not text.lstrip().startswith("---"):
         raise ValueError(f"{source.name}: missing opening '---' frontmatter delimiter")
     body = text.split("---", 2)
@@ -79,7 +82,9 @@ def _parse_frontmatter(text: str, source: Path) -> dict:
     return data
 
 
-def _parse_activity(a: dict, source: Path, valid_kinds: set[str]) -> ActivitySpec:
+def _parse_activity(
+    a: dict, source: Path, valid_kinds: set[str], level: str, order: int
+) -> ActivitySpec:
     title = a["title"]
     kind = a["kind"]
     if kind not in valid_kinds:
@@ -99,6 +104,8 @@ def _parse_activity(a: dict, source: Path, valid_kinds: set[str]) -> ActivitySpe
             title=title,
             kind=kind,
             est_minutes=int(a.get("est_minutes", 1)),
+            level=level,
+            order=order,
             instructions=a.get("instructions", ""),
             prompt=prompt,
             choices=[str(c) for c in choices],
@@ -111,6 +118,8 @@ def _parse_activity(a: dict, source: Path, valid_kinds: set[str]) -> ActivitySpe
         title=title,
         kind=kind,
         est_minutes=int(a["est_minutes"]),
+        level=level,
+        order=order,
         instructions=a["instructions"],
     )
 
@@ -119,8 +128,20 @@ def parse_domain_file(path: Path) -> DomainSpec:
     data = _parse_frontmatter(path.read_text(encoding="utf-8"), path)
     valid_kinds = {k.value for k in DrillKind}
 
-    lessons = [LessonSpec(title=lsn["title"], body=lsn["body"]) for lsn in data.get("lessons", [])]
-    activities = [_parse_activity(a, path, valid_kinds) for a in data.get("activities", [])]
+    levels = data.get("levels")
+    if not isinstance(levels, dict):
+        raise ValueError(f"{path.name}: frontmatter needs a 'levels:' mapping")
+
+    lessons: list[LessonSpec] = []
+    activities: list[ActivitySpec] = []
+    for level in LEVEL_NAMES:
+        block = levels.get(level)
+        if not block:
+            continue
+        for i, lsn in enumerate(block.get("lessons", [])):
+            lessons.append(LessonSpec(title=lsn["title"], body=lsn["body"], level=level, order=i))
+        for i, a in enumerate(block.get("activities", [])):
+            activities.append(_parse_activity(a, path, valid_kinds, level, i))
 
     return DomainSpec(
         slug=data["slug"],
@@ -147,24 +168,31 @@ def _upsert_domain(session: Session, spec: DomainSpec) -> Domain:
     domain.title = spec.title
     domain.default_priority = spec.default_priority
     domain.core_idea = spec.core_idea
-    session.flush()  # assign domain.id for child matching
+    session.flush()
     return domain
 
 
 def _upsert_lessons(session: Session, domain: Domain, lessons: list[LessonSpec]) -> None:
-    existing = {f.order: f for f in domain.facts}
-    for order, lsn in enumerate(lessons):
-        fact = existing.get(order)
+    existing = {(str(f.level), f.order): f for f in domain.facts}
+    new_keys = {(lsn.level, lsn.order) for lsn in lessons}
+    for lsn in lessons:
+        fact = existing.get((lsn.level, lsn.order))
         if fact is None:
             session.add(
-                LessonFact(domain_id=domain.id, order=order, title=lsn.title, body=lsn.body)
+                LessonFact(
+                    domain_id=domain.id,
+                    level=Level(lsn.level),
+                    order=lsn.order,
+                    title=lsn.title,
+                    body=lsn.body,
+                )
             )
         else:
             fact.title = lsn.title
             fact.body = lsn.body
-    # Drop lessons whose order no longer exists in the source (content shrank).
-    for order, fact in existing.items():
-        if order >= len(lessons):
+    # Drop lessons whose (level, order) no longer exists in the source.
+    for key, fact in existing.items():
+        if key not in new_keys:
             session.delete(fact)
 
 
@@ -175,6 +203,8 @@ def _upsert_activities(session: Session, domain: Domain, activities: list[Activi
         if drill is None:
             drill = Drill(domain_id=domain.id, title=spec.title)
             session.add(drill)
+        drill.level = Level(spec.level)
+        drill.order = spec.order
         drill.kind = DrillKind(spec.kind)
         drill.est_minutes = spec.est_minutes
         drill.instructions = spec.instructions

@@ -9,6 +9,15 @@ from app.models import Domain, Drill, DrillKind, DrillLog, LessonFact, LogOutcom
 from app.seed import SEED_USER_ID, seed
 
 
+def test_levels_assigned(session: Session) -> None:
+    seed(session)
+    social = session.scalar(select(Domain).where(Domain.slug == "social-calibration"))
+    assert {str(f.level) for f in social.facts} == {"beginner", "intermediate", "advanced"}
+    # a stub section carries only beginner content for now
+    health = session.scalar(select(Domain).where(Domain.slug == "health"))
+    assert {str(f.level) for f in health.facts} == {"beginner"}
+
+
 def _count(session: Session, model) -> int:
     return session.scalar(select(func.count()).select_from(model))
 

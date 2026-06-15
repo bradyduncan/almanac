@@ -54,6 +54,16 @@ class LogOutcome(enum.StrEnum):
     snoozed = "snoozed"
 
 
+class Level(enum.StrEnum):
+    beginner = "beginner"
+    intermediate = "intermediate"
+    advanced = "advanced"
+
+
+# Progression order; gating unlocks each level once the previous is complete.
+LEVEL_ORDER = [Level.beginner, Level.intermediate, Level.advanced]
+
+
 def _enum(py_enum: type[enum.Enum]) -> SAEnum:
     return SAEnum(py_enum, native_enum=False, validate_strings=True)
 
@@ -85,10 +95,13 @@ class LessonFact(Base):
     """A teaching unit ("lesson"): a short title + prose body, ordered within a domain."""
 
     __tablename__ = "lesson_fact"
-    __table_args__ = (UniqueConstraint("domain_id", "order", name="uq_fact_domain_order"),)
+    __table_args__ = (
+        UniqueConstraint("domain_id", "level", "order", name="uq_fact_domain_level_order"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     domain_id: Mapped[int] = mapped_column(ForeignKey("domain.id"), index=True)
+    level: Mapped[Level] = mapped_column(_enum(Level), server_default=Level.beginner.value)
     title: Mapped[str] = mapped_column(String(200), server_default="")
     body: Mapped[str] = mapped_column(Text)
     order: Mapped[int] = mapped_column(Integer)
@@ -102,10 +115,12 @@ class Drill(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     domain_id: Mapped[int] = mapped_column(ForeignKey("domain.id"), index=True)
+    level: Mapped[Level] = mapped_column(_enum(Level), server_default=Level.beginner.value)
     title: Mapped[str] = mapped_column(String(200))
     kind: Mapped[DrillKind] = mapped_column(_enum(DrillKind))
     est_minutes: Mapped[int] = mapped_column(Integer)
     instructions: Mapped[str] = mapped_column(Text)
+    order: Mapped[int] = mapped_column(Integer, server_default="0")
     # Quiz-only (kind == quiz); null for confirm activities.
     prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     choices: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list[str]
