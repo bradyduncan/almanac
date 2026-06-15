@@ -36,12 +36,16 @@ class Base(DeclarativeBase):
 
 
 class DrillKind(enum.StrEnum):
+    # "confirm" activities — you do them and confirm completion.
     script = "script"
     reflection = "reflection"
     rehearsal = "rehearsal"
     checklist = "checklist"
     audit = "audit"
     record_review = "record_review"
+    confirm = "confirm"
+    # auto-graded multiple-choice question.
+    quiz = "quiz"
 
 
 class LogOutcome(enum.StrEnum):
@@ -78,11 +82,14 @@ class Domain(Base):
 
 
 class LessonFact(Base):
+    """A teaching unit ("lesson"): a short title + prose body, ordered within a domain."""
+
     __tablename__ = "lesson_fact"
     __table_args__ = (UniqueConstraint("domain_id", "order", name="uq_fact_domain_order"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     domain_id: Mapped[int] = mapped_column(ForeignKey("domain.id"), index=True)
+    title: Mapped[str] = mapped_column(String(200), server_default="")
     body: Mapped[str] = mapped_column(Text)
     order: Mapped[int] = mapped_column(Integer)
 
@@ -99,6 +106,10 @@ class Drill(Base):
     kind: Mapped[DrillKind] = mapped_column(_enum(DrillKind))
     est_minutes: Mapped[int] = mapped_column(Integer)
     instructions: Mapped[str] = mapped_column(Text)
+    # Quiz-only (kind == quiz); null for confirm activities.
+    prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    choices: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list[str]
+    answer_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     domain: Mapped[Domain] = relationship(back_populates="drills")
 
@@ -129,6 +140,8 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     active_days_per_week: Mapped[int] = mapped_column(Integer, default=7, server_default=text("7"))
     daily_minutes: Mapped[int] = mapped_column(Integer, default=15, server_default=text("15"))
+    # Primary daily goal: number of items (lessons + activities) to complete.
+    daily_items: Mapped[int] = mapped_column(Integer, default=5, server_default=text("5"))
 
 
 class UserDomainPref(Base):
@@ -172,4 +185,6 @@ class DrillLog(Base):
     outcome: Mapped[LogOutcome] = mapped_column(_enum(LogOutcome))
     # 1 easy .. 3 hard, set only on outcome == done
     difficulty: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Quiz grading result; null for non-quiz activities.
+    correct: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)

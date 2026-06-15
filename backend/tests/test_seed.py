@@ -5,7 +5,7 @@ from datetime import datetime
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import Domain, Drill, DrillLog, LessonFact, LogOutcome, User
+from app.models import Domain, Drill, DrillKind, DrillLog, LessonFact, LogOutcome, User
 from app.seed import SEED_USER_ID, seed
 
 
@@ -18,14 +18,30 @@ def test_seed_populates_catalog(session: Session) -> None:
 
     assert counts["domains"] == 10
     assert _count(session, Domain) == 10
-    assert _count(session, Drill) == counts["drills"]
-    assert _count(session, LessonFact) == counts["facts"]
+    assert _count(session, Drill) == counts["activities"]
+    assert _count(session, LessonFact) == counts["lessons"]
+    assert counts["quizzes"] > 0
     # single seed user exists
     assert session.get(User, SEED_USER_ID) is not None
 
     # priorities are the expected 1..10 set, one per domain
     priorities = sorted(session.scalars(select(Domain.default_priority)))
     assert priorities == list(range(1, 11))
+
+
+def test_lessons_have_titles(session: Session) -> None:
+    seed(session)
+    assert all(f.title for f in session.scalars(select(LessonFact)))
+
+
+def test_quizzes_have_choices_and_answer(session: Session) -> None:
+    seed(session)
+    quizzes = list(session.scalars(select(Drill).where(Drill.kind == DrillKind.quiz)))
+    assert quizzes
+    for q in quizzes:
+        assert q.prompt
+        assert q.choices  # JSON string
+        assert q.answer_index is not None
 
 
 def test_seed_is_idempotent(session: Session) -> None:
