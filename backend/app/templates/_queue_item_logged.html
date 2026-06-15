@@ -1,0 +1,12 @@
+<div class="card drill logged {{ outcome }}" id="item-{{ drill.id }}">
+  <div class="card-head">
+    <span class="domain-tag">{{ domain_title }}</span>
+    <span class="mins">{{ drill.est_minutes }} min</span>
+  </div>
+  <h3>{{ drill.title }}</h3>
+  <p class="logged-state">
+    {% if outcome == "done" %}✓ Done{% if difficulty %} ({{ ["", "easy", "ok", "hard"][difficulty] }}){% endif %}
+    {% elif outcome == "skipped" %}— Skipped
+    {% else %}↩ Snoozed{% endif %}
+  </p>
+</div>

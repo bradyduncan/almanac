@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Today — Almanac{% endblock %}
+{% block content %}
+<section class="today">
+  <div class="section-head">
+    <h2>Today</h2>
+    <span class="budget">{{ queued_minutes }} / {{ budget_minutes }} min</span>
+  </div>
+  <div class="queue">
+    {% for item in items %}
+      {% include "_queue_item.html" %}
+    {% else %}
+      <p class="empty">No drills queued.</p>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="progress">
+  <h2>Domains</h2>
+  <div class="domain-grid">
+    {% for row in progress %}
+    <a class="card domain-summary" href="/d/{{ row.domain.slug }}">
+      <div class="card-head">
+        <span class="prio">#{{ row.domain.default_priority }}</span>
+        <span class="streak" title="Current streak (active days)">🔥 {{ row.streak }}</span>
+      </div>
+      <h3>{{ row.domain.title }}</h3>
+      <div class="coverage-bar" title="{{ row.coverage.covered }}/{{ row.coverage.total }} covered">
+        <div class="coverage-fill" style="width: {{ (row.coverage.ratio * 100) | int }}%"></div>
+      </div>
+      <p class="coverage-text">{{ (row.coverage.ratio * 100) | int }}% covered</p>
+    </a>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}

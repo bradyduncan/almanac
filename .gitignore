@@ -17,6 +17,9 @@ backend/.venv/
 .pytest_cache/
 .ruff_cache/
 
+# Logs
+*.log
+
 # OS / editor
 .DS_Store
 .vscode/

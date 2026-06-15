@@ -1,0 +1,23 @@
+<div class="card drill" id="item-{{ item.drill.id }}">
+  <div class="card-head">
+    <span class="domain-tag">{{ item.domain_title }}</span>
+    {% if item.forced %}<span class="badge forced" title="Force-included: this domain was overdue">overdue</span>{% endif %}
+    <span class="mins">{{ item.drill.est_minutes }} min</span>
+  </div>
+  <h3>{{ item.drill.title }}</h3>
+  <p class="kind">{{ item.drill.kind.value }}</p>
+  <p class="instructions">{{ item.drill.instructions }}</p>
+  <div class="actions">
+    <span class="label">Done:</span>
+    <button hx-post="/ui/drill-log" hx-vals='{"drill_id": {{ item.drill.id }}, "outcome": "done", "difficulty": 1}'
+            hx-target="#item-{{ item.drill.id }}" hx-swap="outerHTML">Easy</button>
+    <button hx-post="/ui/drill-log" hx-vals='{"drill_id": {{ item.drill.id }}, "outcome": "done", "difficulty": 2}'
+            hx-target="#item-{{ item.drill.id }}" hx-swap="outerHTML">OK</button>
+    <button hx-post="/ui/drill-log" hx-vals='{"drill_id": {{ item.drill.id }}, "outcome": "done", "difficulty": 3}'
+            hx-target="#item-{{ item.drill.id }}" hx-swap="outerHTML">Hard</button>
+    <button class="ghost" hx-post="/ui/drill-log" hx-vals='{"drill_id": {{ item.drill.id }}, "outcome": "skipped"}'
+            hx-target="#item-{{ item.drill.id }}" hx-swap="outerHTML">Skip</button>
+    <button class="ghost" hx-post="/ui/drill-log" hx-vals='{"drill_id": {{ item.drill.id }}, "outcome": "snoozed"}'
+            hx-target="#item-{{ item.drill.id }}" hx-swap="outerHTML">Snooze</button>
+  </div>
+</div>

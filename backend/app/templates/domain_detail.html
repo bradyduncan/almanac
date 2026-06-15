@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}{{ domain.title }} — Almanac{% endblock %}
+{% block content %}
+<section class="domain-detail">
+  <a href="/" class="back">← Today</a>
+  <h2>{{ domain.title }}</h2>
+  <p class="core-idea">{{ domain.core_idea }}</p>
+
+  <h3>What to know</h3>
+  <div class="facts">
+    {% for f in facts %}
+      {% with fact = f.fact, reviewed = f.reviewed %}
+        {% include "_fact.html" %}
+      {% endwith %}
+    {% endfor %}
+  </div>
+
+  <h3>Drills</h3>
+  <div class="drills">
+    {% for d in drills %}
+    <div class="card drill-ref {% if d.done %}done{% endif %}">
+      <div class="card-head">
+        <span class="kind">{{ d.drill.kind.value }}</span>
+        <span class="mins">{{ d.drill.est_minutes }} min</span>
+        {% if d.done %}<span class="fact-state">✓ done</span>{% endif %}
+      </div>
+      <h4>{{ d.drill.title }}</h4>
+      <p class="instructions">{{ d.drill.instructions }}</p>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}
