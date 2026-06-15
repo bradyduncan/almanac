@@ -1,9 +1,10 @@
 <div class="fact {% if reviewed %}reviewed{% endif %}" id="fact-{{ fact.id }}">
+  <h4 class="fact-title">{{ fact.title }}</h4>
   <p class="fact-body">{{ fact.body }}</p>
   {% if reviewed %}
     <span class="fact-state">✓ reviewed</span>
   {% else %}
     <button hx-post="/ui/fact-review" hx-vals='{"fact_id": {{ fact.id }}}'
-            hx-target="#fact-{{ fact.id }}" hx-swap="outerHTML">Mark reviewed</button>
+            hx-target="#fact-{{ fact.id }}" hx-swap="outerHTML">Mark learned</button>
   {% endif %}
 </div>

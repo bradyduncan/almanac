@@ -15,17 +15,24 @@
     {% endfor %}
   </div>
 
-  <h3>Drills</h3>
+  <h3>Activities</h3>
   <div class="drills">
     {% for d in drills %}
     <div class="card drill-ref {% if d.done %}done{% endif %}">
       <div class="card-head">
-        <span class="kind">{{ d.drill.kind.value }}</span>
-        <span class="mins">{{ d.drill.est_minutes }} min</span>
+        <span class="type-tag">{% if d.is_quiz %}Quiz{% else %}{{ d.drill.kind.value }}{% endif %}</span>
+        {% if not d.is_quiz %}<span class="mins">{{ d.drill.est_minutes }} min</span>{% endif %}
         {% if d.done %}<span class="fact-state">✓ done</span>{% endif %}
       </div>
       <h4>{{ d.drill.title }}</h4>
-      <p class="instructions">{{ d.drill.instructions }}</p>
+      {% if d.is_quiz %}
+        <p class="prompt">{{ d.drill.prompt }}</p>
+        <ul class="choice-list">
+          {% for c in d.choices %}<li>{{ c }}</li>{% endfor %}
+        </ul>
+      {% else %}
+        <p class="instructions">{{ d.drill.instructions }}</p>
+      {% endif %}
     </div>
     {% endfor %}
   </div>

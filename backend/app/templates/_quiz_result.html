@@ -1,0 +1,10 @@
+<div class="card item activity quiz graded {{ 'correct' if correct else 'wrong' }}" id="item-drill-{{ drill.id }}">
+  <div class="card-head">
+    <span class="domain-tag">{{ domain_title }}</span>
+    <span class="type-tag">Quiz</span>
+  </div>
+  <p class="prompt">{{ drill.prompt }}</p>
+  <p class="result">{% if correct %}✓ Correct{% else %}✗ Not quite{% endif %}</p>
+  <p class="answer">Answer: {{ choices[drill.answer_index] }}</p>
+  {% if not correct %}<p class="your-choice">You chose: {{ choices[chosen_index] }}</p>{% endif %}
+</div>

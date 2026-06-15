@@ -17,3 +17,7 @@ class NotFoundError(AppError):
         self.entity = entity
         self.key = key
         super().__init__(f"{entity} not found: {key!r}")
+
+
+class BadRequestError(AppError):
+    """The request is malformed or not valid for the target entity."""

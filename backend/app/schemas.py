@@ -6,9 +6,10 @@ these. Read models use from_attributes so they can be built with `model_validate
 
 from __future__ import annotations
 
+import json
 from datetime import date, datetime
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.models import DrillKind, LogOutcome
 
@@ -32,17 +33,30 @@ class DomainOut(_ORMModel):
 
 class LessonFactOut(_ORMModel):
     id: int
+    title: str
     body: str
     order: int
 
 
 class DrillOut(_ORMModel):
+    """Activity. For quizzes, `prompt` + `choices` are populated; the correct answer is
+    never serialized (grading is server-side)."""
+
     id: int
     domain_id: int
     title: str
     kind: DrillKind
     est_minutes: int
     instructions: str
+    prompt: str | None = None
+    choices: list[str] | None = None
+
+    @field_validator("choices", mode="before")
+    @classmethod
+    def _parse_choices(cls, v: object) -> object:
+        if isinstance(v, str):
+            return json.loads(v)
+        return v
 
 
 class DomainDetailOut(DomainOut):
@@ -91,20 +105,39 @@ class FactReviewOut(_ORMModel):
 
 
 # --------------------------------------------------------------------------- #
+# Quizzes
+# --------------------------------------------------------------------------- #
+
+
+class QuizAnswer(BaseModel):
+    drill_id: int
+    choice_index: int
+
+
+class QuizResult(BaseModel):
+    drill_id: int
+    correct: bool
+    chosen_index: int
+    answer_index: int
+
+
+# --------------------------------------------------------------------------- #
 # Today's queue
 # --------------------------------------------------------------------------- #
 
 
 class QueueItemOut(BaseModel):
-    drill: DrillOut
+    kind: str  # "lesson" | "activity"
     domain_title: str
     score: float
     forced: bool
     factors: dict[str, float]
+    lesson: LessonFactOut | None = None
+    drill: DrillOut | None = None
 
 
 class TodayOut(BaseModel):
     day: date
-    budget_minutes: int
-    queued_minutes: int
+    goal: int
+    queued: int
     items: list[QueueItemOut]

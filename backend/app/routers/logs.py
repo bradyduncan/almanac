@@ -9,7 +9,14 @@ from sqlalchemy.orm import Session
 
 from app import service
 from app.db import get_session
-from app.schemas import FactReviewCreate, FactReviewOut, LogCreate, LogOut
+from app.schemas import (
+    FactReviewCreate,
+    FactReviewOut,
+    LogCreate,
+    LogOut,
+    QuizAnswer,
+    QuizResult,
+)
 
 router = APIRouter(tags=["logs"])
 
@@ -29,3 +36,16 @@ def create_fact_review(
         session, service.CURRENT_USER_ID, data.fact_id, now=datetime.now()
     )
     return FactReviewOut.model_validate(review)
+
+
+@router.post("/quiz-answers", response_model=QuizResult, status_code=status.HTTP_201_CREATED)
+def submit_quiz_answer(data: QuizAnswer, session: Session = Depends(get_session)) -> QuizResult:
+    drill, correct = service.grade_quiz(
+        session, service.CURRENT_USER_ID, data.drill_id, data.choice_index, now=datetime.now()
+    )
+    return QuizResult(
+        drill_id=drill.id,
+        correct=correct,
+        chosen_index=data.choice_index,
+        answer_index=drill.answer_index,
+    )

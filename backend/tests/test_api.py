@@ -22,8 +22,8 @@ def test_domain_detail_includes_facts_and_drills(client: TestClient) -> None:
     assert resp.status_code == 200
     data = resp.json()
     assert data["slug"] == "social-calibration"
-    assert len(data["facts"]) == 3
-    assert len(data["drills"]) == 3
+    assert len(data["facts"]) == 2  # lessons
+    assert len(data["drills"]) == 5  # 3 confirm + 2 quiz
     assert {d["kind"] for d in data["drills"]} <= {
         "script",
         "reflection",
@@ -31,6 +31,8 @@ def test_domain_detail_includes_facts_and_drills(client: TestClient) -> None:
         "checklist",
         "audit",
         "record_review",
+        "confirm",
+        "quiz",
     }
 
 
@@ -44,7 +46,7 @@ def test_list_drills_filtered_by_domain(client: TestClient) -> None:
     resp = client.get("/drills", params={"domain": "first-aid"})
     assert resp.status_code == 200
     data = resp.json()
-    assert len(data) == 2
+    assert len(data) == 4  # 2 confirm + 2 quiz
     assert all(d["domain_id"] == data[0]["domain_id"] for d in data)
 
 
@@ -79,12 +81,21 @@ def test_today_returns_queue(client: TestClient) -> None:
     resp = client.get("/today")
     assert resp.status_code == 200
     data = resp.json()
-    assert data["budget_minutes"] == 15
+    assert data["goal"] == 5
     assert len(data["items"]) >= 1  # never empty
     # cold start at first run -> items carry the cold_start factor
     assert all("cold_start" in it["factors"] for it in data["items"])
     item = data["items"][0]
-    assert "drill" in item and "domain_title" in item
+    assert item["kind"] in {"lesson", "activity"}
+    assert "domain_title" in item
+
+
+def test_today_lessons_surface_first(client: TestClient) -> None:
+    data = client.get("/today").json()
+    # lessons fill the count goal before activities
+    assert any(it["kind"] == "lesson" for it in data["items"])
+    kinds = [it["kind"] for it in data["items"]]
+    assert kinds == sorted(kinds, key=lambda k: k != "lesson")
 
 
 def test_today_reflects_logged_completion(client: TestClient) -> None:
@@ -127,14 +138,16 @@ def test_domain_detail_page_renders(client: TestClient) -> None:
     resp = client.get("/d/social-calibration")
     assert resp.status_code == 200
     assert "What to know" in resp.text
-    assert "Mark reviewed" in resp.text  # facts start unreviewed
+    assert "Activities" in resp.text
+    assert "Mark learned" in resp.text  # lessons start unreviewed
 
 
 def test_ui_drill_log_returns_logged_fragment(client: TestClient) -> None:
+    # drill 1 is a confirm-style activity (Mirror check)
     resp = client.post("/ui/drill-log", data={"drill_id": 1, "outcome": "done", "difficulty": 3})
     assert resp.status_code == 200
     assert "✓ Done" in resp.text
-    assert 'id="item-1"' in resp.text
+    assert 'id="item-drill-1"' in resp.text
 
 
 def test_ui_fact_review_marks_reviewed(client: TestClient) -> None:
@@ -151,3 +164,52 @@ def test_domain_progress_after_review_and_log(client: TestClient) -> None:
     client.post("/logs", json={"drill_id": 1, "outcome": "done", "difficulty": 2})
     page = client.get("/").text
     assert "% covered" in page
+
+
+# --------------------------------------------------------------------------- #
+# Quizzes
+# --------------------------------------------------------------------------- #
+
+
+def _a_quiz(client: TestClient) -> dict:
+    drills = client.get("/domains/social-calibration").json()["drills"]
+    return next(d for d in drills if d["kind"] == "quiz")
+
+
+def test_quiz_out_hides_answer(client: TestClient) -> None:
+    quiz = _a_quiz(client)
+    assert quiz["prompt"]
+    assert isinstance(quiz["choices"], list) and len(quiz["choices"]) >= 2
+    assert "answer_index" not in quiz  # never leak the answer
+
+
+def test_quiz_grading(client: TestClient) -> None:
+    quiz = _a_quiz(client)
+    # first guess reveals the answer index in the result
+    r1 = client.post("/quiz-answers", json={"drill_id": quiz["id"], "choice_index": 0}).json()
+    ans = r1["answer_index"]
+    correct = client.post(
+        "/quiz-answers", json={"drill_id": quiz["id"], "choice_index": ans}
+    ).json()
+    assert correct["correct"] is True
+    wrong_idx = 0 if ans != 0 else 1
+    wrong = client.post(
+        "/quiz-answers", json={"drill_id": quiz["id"], "choice_index": wrong_idx}
+    ).json()
+    assert wrong["correct"] is (wrong_idx == ans)
+
+
+def test_quiz_answer_on_non_quiz_400(client: TestClient) -> None:
+    drills = client.get("/domains/social-calibration").json()["drills"]
+    confirm = next(d for d in drills if d["kind"] != "quiz")
+    resp = client.post("/quiz-answers", json={"drill_id": confirm["id"], "choice_index": 0})
+    assert resp.status_code == 400
+
+
+def test_ui_quiz_answer_fragment(client: TestClient) -> None:
+    quiz = _a_quiz(client)
+    resp = client.post("/ui/quiz-answer", data={"drill_id": quiz["id"], "choice_index": 0})
+    assert resp.status_code == 200
+    assert ("Correct" in resp.text) or ("Not quite" in resp.text)
+    assert "Answer:" in resp.text
+    assert f'id="item-drill-{quiz["id"]}"' in resp.text

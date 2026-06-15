@@ -78,3 +78,22 @@ button.ghost { background: transparent; color: var(--muted); border: 1px solid v
 .drills { display: grid; gap: 0.6rem; margin-top: 0.5rem; }
 .drill-ref.done { border-color: var(--good); }
 .empty { color: var(--muted); }
+
+/* item types */
+.type-tag { color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
+.item.lesson { border-left: 3px solid var(--accent); }
+.lesson-body { white-space: pre-line; }
+.fact-title { margin: 0 0 0.3rem; }
+
+/* quiz */
+.prompt { font-weight: 600; margin: 0.3rem 0 0.5rem; }
+.choices { display: grid; gap: 0.35rem; margin-bottom: 0.6rem; }
+.choice { display: flex; gap: 0.5rem; align-items: center; cursor: pointer; }
+.choice-list { color: var(--muted); margin: 0.2rem 0 0; padding-left: 1.1rem; }
+.quiz.graded.correct { border-color: var(--good); }
+.quiz.graded.wrong { border-color: #d0625f; }
+.result { font-weight: 700; }
+.quiz.correct .result { color: var(--good); }
+.quiz.wrong .result { color: #ff9b97; }
+.answer { color: var(--good); }
+.your-choice { color: var(--muted); }
