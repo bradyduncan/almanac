@@ -1,17 +1,21 @@
+import os
 from logging.config import fileConfig
+from pathlib import Path
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
-from app.db import DATABASE_URL
 from app.models import Base
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
 
-# Resolve the DB URL from the app (env-var aware) rather than alembic.ini.
-config.set_main_option("sqlalchemy.url", DATABASE_URL)
+# Resolve the DB URL at run time (env-var aware) so tests can point this at a temp DB.
+# Mirrors app/db.py's default of backend/almanac.db.
+_default_path = Path(__file__).resolve().parents[1] / "almanac.db"
+_database_url = os.environ.get("ALMANAC_DATABASE_URL", f"sqlite:///{_default_path}")
+config.set_main_option("sqlalchemy.url", _database_url)
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
