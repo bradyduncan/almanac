@@ -69,7 +69,7 @@ A domain (= "section") holds ordered **lessons** (teaching units) and ordered **
 Catalog (global):
 - **domain** — `id`, `slug`, `title`, `default_priority` (int; lower = higher; seed value only, user weights override), `core_idea` (text).
 - **lesson_fact** — `id`, `domain_id`, `title`, `body` (teaching prose), `order`. (Table name kept; represents a "lesson".)
-- **drill** — `id`, `domain_id`, `title`, `kind` (enum: `script` | `reflection` | `rehearsal` | `checklist` | `audit` | `record_review` | `confirm` | `quiz`), `est_minutes` (int), `instructions` (text). Quiz-only, nullable: `prompt` (text), `choices` (JSON list[str]), `answer_index` (int). The correct answer is never serialized to clients; grading is server-side.
+- **drill** — `id`, `domain_id`, `title`, `kind` (enum: `script` | `reflection` | `rehearsal` | `checklist` | `audit` | `record_review` | `confirm` | `quiz`), `est_minutes` (int), `instructions` (text). Quiz-only, nullable: `prompt` (text), `choices` (JSON list[str]), `answer_index` (int). The answer is never sent with the **question** (`DrillOut` omits `answer_index`), so it can't be seen before answering; grading is server-side and the graded result may reveal the answer as feedback.
 - **source_ref** — `id`, `domain_id` (nullable), `url`, `title`, `fetched_at` (nullable), `cached_path` (nullable). Backs the `fetch` utility; not user-facing content.
 
 Progress (per user):
@@ -209,7 +209,7 @@ Deferred, not forbidden — planned for multi-user, see Path to multi-user: auth
 
 - Stack is Python end-to-end: FastAPI + Jinja + HTMX, SQLite, uv. No React, no separate frontend build.
 - `active_days_per_week` default = 7. **Daily goal is item count (`daily_items`, default 5), not minutes** — `daily_minutes` (15) is retained as info only.
-- Content is structured per domain as **lessons** (teaching prose, reviewed/"learned") then **activities**. Activities are confirm-you-did-it tasks or auto-graded multiple-choice **quizzes** (`prompt`/`choices`/`answer_index`; answer never sent to client, graded server-side).
+- Content is structured per domain as **lessons** (teaching prose, reviewed/"learned") then **activities**. Activities are confirm-you-did-it tasks or auto-graded multiple-choice **quizzes** (`prompt`/`choices`/`answer_index`; the question payload omits the answer so it can't be seen before answering, graded server-side, result reveals it as feedback).
 - Scheduler is a self-guided scoring policy with a minimum-breadth floor, not a fixed rotation. The queue mixes lessons + activities, surfaces unreviewed lessons first, and packs by item count up to `daily_items`, never empty.
 - Difficulty scale is 1–3 (1 easy, 3 hard), set on `done` for confirm activities; quizzes record `correct` instead.
 - Build order: ship the tracker (milestones 1–3) before the Phase 2 discovery layer.
