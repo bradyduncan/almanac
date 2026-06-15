@@ -14,10 +14,11 @@ from sqlalchemy.orm import Session, selectinload
 
 from app import metrics
 from app import scheduler as sch
-from app.exceptions import NotFoundError
+from app.exceptions import BadRequestError, NotFoundError
 from app.models import (
     Domain,
     Drill,
+    DrillKind,
     DrillLog,
     FactReview,
     LessonFact,
@@ -96,6 +97,30 @@ def create_fact_review(session: Session, user_id: int, fact_id: int, now: dateti
     session.commit()
     session.refresh(review)
     return review
+
+
+def grade_quiz(
+    session: Session, user_id: int, drill_id: int, choice_index: int, now: datetime
+) -> tuple[Drill, bool]:
+    """Grade a quiz answer, log the attempt (outcome=done, correct=...), return (drill, correct)."""
+    drill = session.get(Drill, drill_id)
+    if drill is None:
+        raise NotFoundError("drill", drill_id)
+    if drill.kind != DrillKind.quiz or drill.answer_index is None:
+        raise BadRequestError(f"drill {drill_id} is not a quiz")
+    correct = choice_index == drill.answer_index
+    session.add(
+        DrillLog(
+            user_id=user_id,
+            drill_id=drill_id,
+            logged_at=now,
+            outcome=LogOutcome.done,
+            difficulty=None,
+            correct=correct,
+        )
+    )
+    session.commit()
+    return drill, correct
 
 
 # --------------------------------------------------------------------------- #
@@ -196,19 +221,24 @@ def _load_user(session: Session, user_id: int) -> User:
 def build_today(session: Session, user_id: int, today: date) -> dict:
     """Load rows, run the pure scheduler, return everything routes need to render.
 
-    Returns a dict: {budget, scored, drill_by_id, domain_title_by_id}.
+    Returns: {goal, scored (list[ScoredItem]), drill_by_id, lesson_by_id,
+    domain_title_by_id}.
     """
     user = _load_user(session, user_id)
 
     domains = list(session.scalars(select(Domain)))
     drills = list(session.scalars(select(Drill)))
+    lessons = list(session.scalars(select(LessonFact)))
     prefs = list(session.scalars(select(UserDomainPref).where(UserDomainPref.user_id == user_id)))
     logs = list(session.scalars(select(DrillLog).where(DrillLog.user_id == user_id)))
+    reviewed = set(session.scalars(select(FactReview.fact_id).where(FactReview.user_id == user_id)))
 
     drill_by_id = {d.id: d for d in drills}
+    lesson_by_id = {lsn.id: lsn for lsn in lessons}
     domain_title_by_id = {d.id: d.title for d in domains}
 
     scored = sch.build_queue(
+        lessons=[sch.LessonInfo(lsn.id, lsn.domain_id, lsn.order) for lsn in lessons],
         drills=[sch.DrillInfo(d.id, d.domain_id, d.est_minutes) for d in drills],
         domains=[sch.DomainInfo(d.id, d.default_priority) for d in domains],
         prefs=[sch.PrefInfo(p.domain_id, p.weight, p.active) for p in prefs],
@@ -223,16 +253,18 @@ def build_today(session: Session, user_id: int, today: date) -> dict:
             for lg in logs
             if lg.drill_id in drill_by_id
         ],
+        reviewed_lesson_ids=reviewed,
         config=sch.Config(
-            daily_minutes=user.daily_minutes,
+            daily_items=user.daily_items,
             active_days_per_week=user.active_days_per_week,
         ),
         today=today,
     )
 
     return {
-        "budget": user.daily_minutes,
+        "goal": user.daily_items,
         "scored": scored,
         "drill_by_id": drill_by_id,
+        "lesson_by_id": lesson_by_id,
         "domain_title_by_id": domain_title_by_id,
     }

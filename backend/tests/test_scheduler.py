@@ -4,66 +4,62 @@ from datetime import date, datetime, timedelta
 
 from app import scheduler as sch
 from app.scheduler import (
+    ACTIVITY,
     BREADTH_FLOOR_DAYS,
-    COLD_START_MIN_LOGS,
+    COLD_START_MIN_EVENTS,
+    LESSON,
     SPACING_COOLDOWN_DAYS,
     Config,
     DomainInfo,
     DrillInfo,
+    LessonInfo,
     LogEntry,
     PrefInfo,
     build_queue,
 )
 
-TODAY = date(2026, 6, 14)
+TODAY = date(2026, 6, 15)
 
-
-def _log(drill_id: int, domain_id: int, days_ago: int, outcome="done", difficulty=2) -> LogEntry:
-    ts = datetime(2026, 6, 14, 9, 0) - timedelta(days=days_ago)
-    return LogEntry(
-        drill_id=drill_id,
-        domain_id=domain_id,
-        logged_at=ts,
-        outcome=outcome,
-        difficulty=difficulty if outcome == "done" else None,
-    )
-
-
-def _ids(queue) -> list[int]:
-    return [sd.drill.id for sd in queue]
-
-
-# Catalog: 2 domains, 2 drills each, every drill 5 minutes.
-DOMAINS = [DomainInfo(id=1, default_priority=1), DomainInfo(id=2, default_priority=2)]
+# Catalog: 2 domains. Lessons 101/102 (d1), 201 (d2). Activities 11/12 (d1), 21/22 (d2).
+DOMAINS = [DomainInfo(1, 1), DomainInfo(2, 2)]
+LESSONS = [LessonInfo(101, 1, 0), LessonInfo(102, 1, 1), LessonInfo(201, 2, 0)]
 DRILLS = [
-    DrillInfo(id=11, domain_id=1, est_minutes=5),
-    DrillInfo(id=12, domain_id=1, est_minutes=5),
-    DrillInfo(id=21, domain_id=2, est_minutes=5),
-    DrillInfo(id=22, domain_id=2, est_minutes=5),
+    DrillInfo(11, 1, 5),
+    DrillInfo(12, 1, 5),
+    DrillInfo(21, 2, 5),
+    DrillInfo(22, 2, 5),
 ]
 
 
-def _filler_logs(n: int) -> list[LogEntry]:
-    """n recent logs that keep both domains 'active' (within breadth floor) and out of
-    cold start, without suppressing any specific drill via spacing."""
-    out = []
-    for i in range(n):
-        # alternate domains, all SPACING_COOLDOWN_DAYS+ days old so nothing is suppressed
-        drill = 11 if i % 2 == 0 else 21
-        domain = 1 if i % 2 == 0 else 2
-        out.append(_log(drill, domain, days_ago=SPACING_COOLDOWN_DAYS + 1))
-    return out
+def _log(drill_id, domain_id, days_ago, outcome="done", difficulty=2) -> LogEntry:
+    ts = datetime(2026, 6, 15, 9, 0) - timedelta(days=days_ago)
+    return LogEntry(drill_id, domain_id, ts, outcome, difficulty if outcome == "done" else None)
 
 
-def _build(logs, prefs=None, daily_minutes=100):
+def _build(logs=None, reviewed=None, prefs=None, daily_items=20):
     return build_queue(
+        lessons=LESSONS,
         drills=DRILLS,
         domains=DOMAINS,
         prefs=prefs or [],
-        logs=logs,
-        config=Config(daily_minutes=daily_minutes),
+        logs=logs or [],
+        reviewed_lesson_ids=reviewed or set(),
+        config=Config(daily_items=daily_items),
         today=TODAY,
     )
+
+
+def _ids(queue):
+    return [(it.kind, it.item_id) for it in queue]
+
+
+def _filler(n):
+    """n activity logs keeping both domains active and out of spacing/cold-start."""
+    out = []
+    for i in range(n):
+        drill, dom = (11, 1) if i % 2 == 0 else (21, 2)
+        out.append(_log(drill, dom, days_ago=SPACING_COOLDOWN_DAYS + 1))
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -71,167 +67,144 @@ def _build(logs, prefs=None, daily_minutes=100):
 # --------------------------------------------------------------------------- #
 
 
-def test_cold_start_uses_rotation_order():
-    queue = _build(logs=[])  # zero logs -> cold start
-    # domain 1 (priority 1) drills come before domain 2 (priority 2)
-    assert _ids(queue) == [11, 12, 21, 22]
-    assert all("cold_start" in sd.factors for sd in queue)
+def test_cold_start_lessons_before_activities():
+    q = _build()  # no history
+    assert all("cold_start" in it.factors for it in q)
+    kinds = [it.kind for it in q]
+    # every lesson precedes every activity
+    last_lesson = max(i for i, k in enumerate(kinds) if k == LESSON)
+    first_activity = min(i for i, k in enumerate(kinds) if k == ACTIVITY)
+    assert last_lesson < first_activity
 
 
-def test_cold_start_boundary():
-    # Exactly COLD_START_MIN_LOGS logs leaves cold start.
-    queue = _build(logs=_filler_logs(COLD_START_MIN_LOGS))
-    assert all("cold_start" not in sd.factors for sd in queue)
+def test_cold_start_count_goal_trims_to_lessons_first():
+    q = _build(daily_items=2)
+    assert len(q) == 2
+    assert all(it.kind == LESSON for it in q)  # lessons fill the goal first
 
 
-# --------------------------------------------------------------------------- #
-# Spacing (hard filter)
-# --------------------------------------------------------------------------- #
-
-
-def test_spacing_suppresses_recent_drill():
-    logs = _filler_logs(COLD_START_MIN_LOGS)
-    logs.append(_log(12, 1, days_ago=SPACING_COOLDOWN_DAYS - 1))  # done inside cooldown
-    queue = _build(logs)
-    assert 12 not in _ids(queue)
-
-
-def test_spacing_allows_drill_past_cooldown():
-    logs = _filler_logs(COLD_START_MIN_LOGS)
-    logs.append(_log(12, 1, days_ago=SPACING_COOLDOWN_DAYS))  # exactly at edge -> eligible
-    queue = _build(logs)
-    assert 12 in _ids(queue)
+def test_leaves_cold_start_at_threshold():
+    q = _build(logs=_filler(COLD_START_MIN_EVENTS))
+    assert all("cold_start" not in it.factors for it in q)
 
 
 # --------------------------------------------------------------------------- #
-# Scoring factors
+# Lessons
 # --------------------------------------------------------------------------- #
+
+
+def test_reviewed_lessons_drop_out():
+    q = _build(logs=_filler(COLD_START_MIN_EVENTS), reviewed={101, 102, 201})
+    assert all(it.kind != LESSON for it in q)
+
+
+def test_unreviewed_lesson_present():
+    q = _build(logs=_filler(COLD_START_MIN_EVENTS), reviewed={101, 201})
+    assert (LESSON, 102) in _ids(q)
+
+
+def test_lessons_ordered_before_activities_when_scored():
+    q = _build(logs=_filler(COLD_START_MIN_EVENTS))
+    kinds = [it.kind for it in q]
+    assert kinds == sorted(kinds, key=lambda k: k != LESSON)  # all lessons first
+
+
+# --------------------------------------------------------------------------- #
+# Activity scoring (review all lessons so activities surface cleanly)
+# --------------------------------------------------------------------------- #
+
+ALL_REVIEWED = {101, 102, 201}
+
+
+def _activity(q, drill_id):
+    return next(it for it in q if it.kind == ACTIVITY and it.item_id == drill_id)
+
+
+def test_spacing_suppresses_recent_activity():
+    logs = _filler(COLD_START_MIN_EVENTS) + [_log(12, 1, days_ago=SPACING_COOLDOWN_DAYS - 1)]
+    q = _build(logs=logs, reviewed=ALL_REVIEWED)
+    assert (ACTIVITY, 12) not in _ids(q)
+
+
+def test_spacing_allows_at_cooldown_edge():
+    logs = _filler(COLD_START_MIN_EVENTS) + [_log(12, 1, days_ago=SPACING_COOLDOWN_DAYS)]
+    q = _build(logs=logs, reviewed=ALL_REVIEWED)
+    assert (ACTIVITY, 12) in _ids(q)
 
 
 def test_neglect_ranks_more_neglected_domain_higher():
-    # Domain 2 last touched long ago, domain 1 touched recently. Equal priority weights.
-    logs = _filler_logs(COLD_START_MIN_LOGS)
-    logs.append(_log(11, 1, days_ago=1))  # domain 1 fresh
-    logs.append(_log(21, 2, days_ago=8))  # domain 2 neglected (but < breadth floor)
-    prefs = [PrefInfo(1, weight=1.0, active=True), PrefInfo(2, weight=1.0, active=True)]
-    queue = _build(logs, prefs=prefs)
-    d1 = next(sd for sd in queue if sd.drill.domain_id == 1)
-    d2 = next(sd for sd in queue if sd.drill.domain_id == 2)
-    assert d2.factors["neglect"] > d1.factors["neglect"]
-    assert d2.score > d1.score
+    # Domain 1 fresh (1d), domain 2 neglected (8d). Compare never-done drills 12 & 22 so
+    # neither is spacing-suppressed; equal priority weights isolate the neglect factor.
+    logs = [_log(11, 1, days_ago=1), _log(21, 2, days_ago=8)]  # +3 reviewed = 5 events
+    prefs = [PrefInfo(1, 1.0, True), PrefInfo(2, 1.0, True)]
+    q = _build(logs=logs, reviewed=ALL_REVIEWED, prefs=prefs)
+    assert _activity(q, 22).factors["neglect"] > _activity(q, 12).factors["neglect"]
 
 
 def test_priority_weight_raises_score():
-    logs = _filler_logs(COLD_START_MIN_LOGS)
-    # same neglect for both domains
-    logs.append(_log(11, 1, days_ago=3))
-    logs.append(_log(21, 2, days_ago=3))
-    prefs = [PrefInfo(1, weight=2.0, active=True), PrefInfo(2, weight=0.1, active=True)]
-    queue = _build(logs, prefs=prefs)
-    d1 = next(sd for sd in queue if sd.drill.domain_id == 1)
-    d2 = next(sd for sd in queue if sd.drill.domain_id == 2)
-    assert d1.factors["priority"] > d2.factors["priority"]
-    assert d1.score > d2.score
+    logs = _filler(COLD_START_MIN_EVENTS) + [_log(11, 1, days_ago=3), _log(21, 2, days_ago=3)]
+    prefs = [PrefInfo(1, 2.0, True), PrefInfo(2, 0.1, True)]
+    q = _build(logs=logs, reviewed=ALL_REVIEWED, prefs=prefs)
+    assert _activity(q, 11).factors["priority"] > _activity(q, 21).factors["priority"]
 
 
-def test_difficulty_hard_outranks_easy_same_drill_conditions():
-    logs = _filler_logs(COLD_START_MIN_LOGS)
-    # drill 11 last rated hard (3), drill 21 last rated easy (1). Use the cooldown edge so
-    # these are the most-recent completions (more recent than filler) yet still eligible.
-    logs.append(_log(11, 1, days_ago=SPACING_COOLDOWN_DAYS, difficulty=3))
-    logs.append(_log(21, 2, days_ago=SPACING_COOLDOWN_DAYS, difficulty=1))
-    prefs = [PrefInfo(1, weight=1.0, active=True), PrefInfo(2, weight=1.0, active=True)]
-    queue = _build(logs, prefs=prefs)
-    hard = next(sd for sd in queue if sd.drill.id == 11)
-    easy = next(sd for sd in queue if sd.drill.id == 21)
-    assert hard.factors["difficulty"] > easy.factors["difficulty"]
+def test_difficulty_hard_outranks_easy():
+    logs = _filler(COLD_START_MIN_EVENTS) + [
+        _log(11, 1, days_ago=SPACING_COOLDOWN_DAYS, difficulty=3),
+        _log(21, 2, days_ago=SPACING_COOLDOWN_DAYS, difficulty=1),
+    ]
+    q = _build(logs=logs, reviewed=ALL_REVIEWED)
+    assert _activity(q, 11).factors["difficulty"] > _activity(q, 21).factors["difficulty"]
 
 
 def test_novelty_bonus_for_never_attempted():
-    logs = _filler_logs(COLD_START_MIN_LOGS)
-    logs.append(_log(11, 1, days_ago=3))  # 11 attempted, 12 never
-    queue = _build(logs)
-    attempted = next(sd for sd in queue if sd.drill.id == 11)
-    never = next(sd for sd in queue if sd.drill.id == 12)
-    assert never.factors["novelty"] == 1.0
-    assert attempted.factors["novelty"] == 0.0
+    logs = _filler(COLD_START_MIN_EVENTS) + [_log(11, 1, days_ago=3)]
+    q = _build(logs=logs, reviewed=ALL_REVIEWED)
+    assert _activity(q, 12).factors["novelty"] == 1.0
+    assert _activity(q, 11).factors["novelty"] == 0.0
 
 
 # --------------------------------------------------------------------------- #
-# Minimum-breadth floor
+# Breadth floor / packing / never empty
 # --------------------------------------------------------------------------- #
 
 
 def test_breadth_floor_forces_starved_domain():
-    # Domain 2 starved (untouched > floor), domain 1 active and high priority.
-    logs = _filler_logs(COLD_START_MIN_LOGS)  # filler touches domains 1 and 2 recently...
-    # ...so override: make ALL recent activity domain 1 only, domain 2 ancient.
-    logs = [_log(11, 1, days_ago=SPACING_COOLDOWN_DAYS + 1) for _ in range(COLD_START_MIN_LOGS)]
+    # All recent activity in domain 1; domain 2 untouched beyond the floor.
+    logs = [_log(11, 1, days_ago=SPACING_COOLDOWN_DAYS + 1) for _ in range(COLD_START_MIN_EVENTS)]
     logs.append(_log(21, 2, days_ago=BREADTH_FLOOR_DAYS + 5))
-    prefs = [PrefInfo(1, weight=2.0, active=True), PrefInfo(2, weight=0.01, active=True)]
-    # Tiny budget so without forcing, domain 2 (low priority) would be packed out.
-    queue = _build(logs, prefs=prefs, daily_minutes=5)
-    forced = [sd for sd in queue if sd.forced]
-    assert any(sd.drill.domain_id == 2 for sd in forced)
-    assert 21 in _ids(queue) or 22 in _ids(queue)
+    prefs = [PrefInfo(1, 2.0, True), PrefInfo(2, 0.01, True)]
+    q = _build(logs=logs, reviewed=ALL_REVIEWED, prefs=prefs, daily_items=1)
+    assert any(it.forced and it.domain_id == 2 for it in q)
 
 
-# --------------------------------------------------------------------------- #
-# Packing / never empty
-# --------------------------------------------------------------------------- #
+def test_count_goal_limits_queue():
+    q = _build(logs=_filler(COLD_START_MIN_EVENTS), daily_items=3)
+    assert len([it for it in q if not it.forced]) <= 3
 
 
-def test_pack_respects_budget():
-    logs = _filler_logs(COLD_START_MIN_LOGS)
-    queue = _build(logs, daily_minutes=10)  # 2 drills of 5 min fit
-    non_forced = [sd for sd in queue if not sd.forced]
-    assert sum(sd.drill.est_minutes for sd in non_forced) <= 10
-
-
-def test_never_empty_even_when_single_drill_over_budget():
-    big = [DrillInfo(id=99, domain_id=1, est_minutes=60)]
-    queue = build_queue(
-        drills=big,
-        domains=[DomainInfo(id=1, default_priority=1)],
-        prefs=[],
-        logs=[],
-        config=Config(daily_minutes=15),
-        today=TODAY,
-    )
-    assert len(queue) == 1
-
-
-def test_never_empty_when_all_drills_spacing_suppressed():
-    # Every drill done yesterday (inside cooldown) and every domain touched recently
-    # (not starved). Without the spacing-override guard, the queue would be empty.
-    logs = [
+def test_never_empty_all_activities_suppressed_no_lessons():
+    logs = _filler(COLD_START_MIN_EVENTS) + [
         _log(11, 1, days_ago=1),
         _log(12, 1, days_ago=1),
         _log(21, 2, days_ago=1),
         _log(22, 2, days_ago=1),
-        _log(11, 1, days_ago=3),  # filler to leave cold start
     ]
-    queue = _build(logs)
-    assert len(queue) >= 1
-    assert any("spacing_override" in sd.factors for sd in queue)
+    q = _build(logs=logs, reviewed=ALL_REVIEWED)
+    assert len(q) >= 1
 
 
 def test_inactive_domain_excluded():
-    logs = _filler_logs(COLD_START_MIN_LOGS)
-    prefs = [PrefInfo(2, weight=1.0, active=False)]
-    queue = _build(logs, prefs=prefs)
-    assert all(sd.drill.domain_id != 2 for sd in queue)
+    q = _build(logs=_filler(COLD_START_MIN_EVENTS), prefs=[PrefInfo(2, 1.0, False)])
+    assert all(it.domain_id != 2 for it in q)
 
 
 def test_determinism():
-    logs = _filler_logs(COLD_START_MIN_LOGS) + [_log(11, 1, days_ago=3)]
-    q1 = _build(logs)
-    q2 = _build(logs)
-    assert _ids(q1) == _ids(q2)
+    logs = _filler(COLD_START_MIN_EVENTS) + [_log(11, 1, days_ago=3)]
+    assert _ids(_build(logs=logs)) == _ids(_build(logs=logs))
 
 
-def test_no_datetime_now_import():
-    # Guard the purity contract: scheduler must not reach for the wall clock.
+def test_purity_no_wall_clock():
     import inspect
 
     src = inspect.getsource(sch)
