@@ -276,6 +276,16 @@ def build_queue(
     # Minimum-breadth floor: force the top drill of any starved domain.
     _apply_breadth_floor(ranked, eligible_drills, domain_by_id, last_domain, today)
 
+    # Never serve an empty day. If every eligible drill is inside its spacing cooldown
+    # and nothing was starved, ranked is empty here — override spacing for the single
+    # drill whose last completion is oldest (the most "due" despite the cooldown).
+    if not ranked and eligible_drills:
+        oldest = min(
+            eligible_drills,
+            key=lambda dr: last_done[dr.id][0] if dr.id in last_done else date.min,
+        )
+        ranked.append(ScoredDrill(drill=oldest, score=0.0, factors={"spacing_override": 1.0}))
+
     # Re-sort so forced drills surface first, then by score.
     ranked.sort(key=lambda sd: (not sd.forced, -sd.score, sd.drill.id))
     return _pack(ranked, config.daily_minutes)
@@ -301,8 +311,7 @@ def _apply_breadth_floor(
         # Prefer the already-ranked (not spacing-suppressed) drills for this domain.
         candidates = [sd for sd in ranked if sd.drill.domain_id == domain_id]
         if candidates:
-            candidates[0].factors["forced"] = 1.0
-            # dataclass is frozen; replace the entry with a forced copy.
+            # Frozen dataclass: replace the top entry with a forced copy in place.
             idx = ranked.index(candidates[0])
             ranked[idx] = _force(candidates[0])
             continue
@@ -316,4 +325,6 @@ def _apply_breadth_floor(
 
 
 def _force(sd: ScoredDrill) -> ScoredDrill:
-    return ScoredDrill(drill=sd.drill, score=sd.score, forced=True, factors={**sd.factors})
+    return ScoredDrill(
+        drill=sd.drill, score=sd.score, forced=True, factors={**sd.factors, "forced": 1.0}
+    )

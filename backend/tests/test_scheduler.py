@@ -201,6 +201,21 @@ def test_never_empty_even_when_single_drill_over_budget():
     assert len(queue) == 1
 
 
+def test_never_empty_when_all_drills_spacing_suppressed():
+    # Every drill done yesterday (inside cooldown) and every domain touched recently
+    # (not starved). Without the spacing-override guard, the queue would be empty.
+    logs = [
+        _log(11, 1, days_ago=1),
+        _log(12, 1, days_ago=1),
+        _log(21, 2, days_ago=1),
+        _log(22, 2, days_ago=1),
+        _log(11, 1, days_ago=3),  # filler to leave cold start
+    ]
+    queue = _build(logs)
+    assert len(queue) >= 1
+    assert any("spacing_override" in sd.factors for sd in queue)
+
+
 def test_inactive_domain_excluded():
     logs = _filler_logs(COLD_START_MIN_LOGS)
     prefs = [PrefInfo(2, weight=1.0, active=False)]
