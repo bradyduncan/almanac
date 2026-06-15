@@ -1,8 +1,8 @@
 """initial schema
 
-Revision ID: ba5ea1a237c4
+Revision ID: 2ce46a888019
 Revises: 
-Create Date: 2026-06-14 23:37:50.427171
+Create Date: 2026-06-14 23:47:11.899307
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = 'ba5ea1a237c4'
+revision: str = '2ce46a888019'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -36,8 +36,8 @@ def upgrade() -> None:
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('handle', sa.String(length=64), nullable=False),
     sa.Column('created_at', sa.DateTime(), server_default=sa.text('(CURRENT_TIMESTAMP)'), nullable=False),
-    sa.Column('active_days_per_week', sa.Integer(), nullable=False),
-    sa.Column('daily_minutes', sa.Integer(), nullable=False),
+    sa.Column('active_days_per_week', sa.Integer(), server_default=sa.text('7'), nullable=False),
+    sa.Column('daily_minutes', sa.Integer(), server_default=sa.text('(15)'), nullable=False),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('handle')
     )
@@ -81,8 +81,8 @@ def upgrade() -> None:
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('user_id', sa.Integer(), nullable=False),
     sa.Column('domain_id', sa.Integer(), nullable=False),
-    sa.Column('weight', sa.Float(), nullable=False),
-    sa.Column('active', sa.Boolean(), nullable=False),
+    sa.Column('weight', sa.Float(), server_default=sa.text('(1.0)'), nullable=False),
+    sa.Column('active', sa.Boolean(), server_default=sa.text('1'), nullable=False),
     sa.ForeignKeyConstraint(['domain_id'], ['domain.id'], ),
     sa.ForeignKeyConstraint(['user_id'], ['user.id'], ),
     sa.PrimaryKeyConstraint('id'),

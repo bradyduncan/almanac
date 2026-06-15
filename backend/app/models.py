@@ -23,6 +23,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy import (
     Enum as SAEnum,
@@ -126,8 +127,8 @@ class User(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     handle: Mapped[str] = mapped_column(String(64), unique=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-    active_days_per_week: Mapped[int] = mapped_column(Integer, default=7)
-    daily_minutes: Mapped[int] = mapped_column(Integer, default=15)
+    active_days_per_week: Mapped[int] = mapped_column(Integer, default=7, server_default=text("7"))
+    daily_minutes: Mapped[int] = mapped_column(Integer, default=15, server_default=text("15"))
 
 
 class UserDomainPref(Base):
@@ -139,8 +140,8 @@ class UserDomainPref(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("user.id"), index=True)
     domain_id: Mapped[int] = mapped_column(ForeignKey("domain.id"), index=True)
-    weight: Mapped[float] = mapped_column(Float, default=1.0)
-    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    weight: Mapped[float] = mapped_column(Float, default=1.0, server_default=text("1.0"))
+    active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("1"))
 
 
 class DrillLog(Base):
