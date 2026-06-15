@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+
+# uv
+backend/.venv/
+
+# Local SQLite DB (regenerate with: alembic upgrade head && python -m app.seed)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+
+# OS / editor
+.DS_Store
+.vscode/
