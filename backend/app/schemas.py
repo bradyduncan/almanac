@@ -80,6 +80,16 @@ class LogOut(_ORMModel):
     note: str | None
 
 
+class FactReviewCreate(BaseModel):
+    fact_id: int
+
+
+class FactReviewOut(_ORMModel):
+    id: int
+    fact_id: int
+    reviewed_at: datetime
+
+
 # --------------------------------------------------------------------------- #
 # Today's queue
 # --------------------------------------------------------------------------- #

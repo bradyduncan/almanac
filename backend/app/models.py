@@ -144,6 +144,17 @@ class UserDomainPref(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("1"))
 
 
+class FactReview(Base):
+    """Event log of a user marking a lesson_fact reviewed. Backs fact coverage."""
+
+    __tablename__ = "fact_review"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("user.id"), index=True)
+    fact_id: Mapped[int] = mapped_column(ForeignKey("lesson_fact.id"), index=True)
+    reviewed_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+
+
 class DrillLog(Base):
     """The event log everything derives from. Never deleted by seeds/migrations."""
 

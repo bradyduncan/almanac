@@ -9,12 +9,22 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
+from app import metrics
 from app import scheduler as sch
 from app.exceptions import NotFoundError
-from app.models import Domain, Drill, DrillLog, LessonFact, User, UserDomainPref
+from app.models import (
+    Domain,
+    Drill,
+    DrillLog,
+    FactReview,
+    LessonFact,
+    LogOutcome,
+    User,
+    UserDomainPref,
+)
 from app.schemas import LogCreate
 
 # The single API-boundary seam for identity. Multi-user later = resolve this from auth
@@ -75,6 +85,100 @@ def create_log(session: Session, user_id: int, data: LogCreate, now: datetime) -
     session.commit()
     session.refresh(log)
     return log
+
+
+def create_fact_review(session: Session, user_id: int, fact_id: int, now: datetime) -> FactReview:
+    fact = session.get(LessonFact, fact_id)
+    if fact is None:
+        raise NotFoundError("lesson_fact", fact_id)
+    review = FactReview(user_id=user_id, fact_id=fact_id, reviewed_at=now)
+    session.add(review)
+    session.commit()
+    session.refresh(review)
+    return review
+
+
+# --------------------------------------------------------------------------- #
+# Progress: streaks + coverage (per domain)
+# --------------------------------------------------------------------------- #
+
+
+def _done_dates_by_domain(session: Session, user_id: int) -> dict[int, list[date]]:
+    """Dates with >=1 completed drill, grouped by domain."""
+    rows = session.execute(
+        select(Drill.domain_id, DrillLog.logged_at)
+        .join(Drill, Drill.id == DrillLog.drill_id)
+        .where(DrillLog.user_id == user_id, DrillLog.outcome == LogOutcome.done)
+    ).all()
+    out: dict[int, list[date]] = {}
+    for domain_id, logged_at in rows:
+        out.setdefault(domain_id, []).append(logged_at.date())
+    return out
+
+
+def _done_drill_ids_by_domain(session: Session, user_id: int) -> dict[int, set[int]]:
+    rows = session.execute(
+        select(Drill.domain_id, DrillLog.drill_id)
+        .join(Drill, Drill.id == DrillLog.drill_id)
+        .where(DrillLog.user_id == user_id, DrillLog.outcome == LogOutcome.done)
+    ).all()
+    out: dict[int, set[int]] = {}
+    for domain_id, drill_id in rows:
+        out.setdefault(domain_id, set()).add(drill_id)
+    return out
+
+
+def _reviewed_fact_ids_by_domain(session: Session, user_id: int) -> dict[int, set[int]]:
+    rows = session.execute(
+        select(LessonFact.domain_id, FactReview.fact_id)
+        .join(LessonFact, LessonFact.id == FactReview.fact_id)
+        .where(FactReview.user_id == user_id)
+    ).all()
+    out: dict[int, set[int]] = {}
+    for domain_id, fact_id in rows:
+        out.setdefault(domain_id, set()).add(fact_id)
+    return out
+
+
+def domain_progress(session: Session, user_id: int, today: date) -> list[dict]:
+    """Per-domain streak + coverage for every domain, in priority order."""
+    user = _load_user(session, user_id)
+    domains = list(session.scalars(select(Domain).order_by(Domain.default_priority)))
+
+    fact_totals: dict[int, int] = dict(
+        session.execute(
+            select(LessonFact.domain_id, func.count()).group_by(LessonFact.domain_id)
+        ).all()
+    )
+    drill_totals: dict[int, int] = dict(
+        session.execute(select(Drill.domain_id, func.count()).group_by(Drill.domain_id)).all()
+    )
+
+    done_dates = _done_dates_by_domain(session, user_id)
+    done_ids = _done_drill_ids_by_domain(session, user_id)
+    reviewed_ids = _reviewed_fact_ids_by_domain(session, user_id)
+
+    result = []
+    for d in domains:
+        streak = metrics.domain_streak(done_dates.get(d.id, []), user.active_days_per_week, today)
+        coverage = metrics.domain_coverage(
+            facts_total=fact_totals.get(d.id, 0),
+            facts_reviewed=len(reviewed_ids.get(d.id, set())),
+            drills_total=drill_totals.get(d.id, 0),
+            drills_done=len(done_ids.get(d.id, set())),
+        )
+        result.append({"domain": d, "streak": streak, "coverage": coverage})
+    return result
+
+
+def domain_detail_progress(session: Session, user_id: int, slug: str) -> dict:
+    """Domain with its facts (reviewed flag) and drills (done flag) for the detail view."""
+    domain = get_domain_detail(session, slug)
+    reviewed = _reviewed_fact_ids_by_domain(session, user_id).get(domain.id, set())
+    done = _done_drill_ids_by_domain(session, user_id).get(domain.id, set())
+    facts = [{"fact": f, "reviewed": f.id in reviewed} for f in domain.facts]
+    drills = [{"drill": dr, "done": dr.id in done} for dr in domain.drills]
+    return {"domain": domain, "facts": facts, "drills": drills}
 
 
 # --------------------------------------------------------------------------- #
