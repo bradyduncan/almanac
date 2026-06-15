@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}{{ domain.title }} · {{ level | capitalize }} — Almanac{% endblock %}
+{% block content %}
+<a href="/d/{{ domain.slug }}" class="back">← {{ domain.title }}</a>
+<section class="level-head">
+  <span class="level-pill {{ level }}">{{ level | capitalize }}</span>
+  <h1>{{ domain.title }}</h1>
+  <div class="level-bar big"><div class="level-fill" style="width: {{ (state.ratio * 100) | int }}%"></div></div>
+  <p class="sub">{{ state.done }} / {{ state.total }} done</p>
+</section>
+
+<h2 class="group-label">Learn</h2>
+<div class="cards">
+  {% for f in lessons %}
+    {% with fact = f.lesson, reviewed = f.reviewed %}
+      {% include "_fact.html" %}
+    {% endwith %}
+  {% endfor %}
+</div>
+
+<h2 class="group-label">Practice</h2>
+<div class="cards">
+  {% for a in drills %}
+    {% include "_activity.html" %}
+  {% endfor %}
+</div>
+
+{% if next and next.available %}
+<div class="next-up">
+  {% if state.complete %}
+    🎉 Level complete! <a class="btn start" href="/d/{{ domain.slug }}/{{ next.level }}">Start {{ next.level | capitalize }} →</a>
+  {% else %}
+    <span class="muted">Finish this level to unlock {{ next.level | capitalize }}.</span>
+  {% endif %}
+</div>
+{% elif state.complete %}
+<div class="next-up">🎉 You finished every level in this path. Nice work.</div>
+{% endif %}
+{% endblock %}

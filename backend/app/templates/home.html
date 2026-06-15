@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Almanac — pick a path{% endblock %}
+{% block content %}
+<section class="hero">
+  <h1>What do you want to get better at?</h1>
+  <p class="sub">Pick a path and start learning. Each one grows from beginner to advanced.</p>
+</section>
+
+<div class="path-grid">
+  {% for s in sections %}
+  <a class="path-card" href="/d/{{ s.domain.slug }}">
+    <div class="ring" style="--pct: {{ (s.ratio * 100) | int }}">
+      <span class="ring-label">{{ (s.ratio * 100) | int }}%</span>
+    </div>
+    <div class="path-body">
+      <h3>{{ s.domain.title }}</h3>
+      <p class="path-idea">{{ s.domain.core_idea }}</p>
+      <div class="level-dots">
+        {% for lv in s.levels %}
+          <span class="dot {% if lv.complete %}done{% elif lv.unlocked %}open{% else %}locked{% endif %}"
+                title="{{ lv.level }}">{% if lv.complete %}✓{% elif lv.unlocked %}●{% else %}🔒{% endif %}</span>
+        {% endfor %}
+      </div>
+    </div>
+  </a>
+  {% endfor %}
+</div>
+{% endblock %}

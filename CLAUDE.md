@@ -4,7 +4,9 @@ This file is read by Claude Code at session start. Keep it current. If a decisio
 
 ## What this is
 
-A single-user dashboard for tracking progress through a fixed set of life-skill domains (social calibration, assertiveness, conflict/negotiation, hosting/cooking, long-view decision-making, etiquette, health, home/car/travel competence, style/grooming, first aid). Each domain has a few "what to know" facts and a set of short drills. The app surfaces a daily drill queue, logs completions, and tracks per-domain streaks and coverage.
+A single-user, **gamified learning app** for a fixed set of life-skill domains (social calibration, assertiveness, conflict/negotiation, hosting/cooking, long-view decision-making, etiquette, health, home/car/travel competence, style/grooming, first aid). The user **browses sections (= domains) and picks one by interest** — nothing is assigned. Each section progresses through three gated levels (beginner → intermediate → advanced); each level holds ordered **lessons** (teaching prose) and **activities** (confirm-you-did-it tasks and auto-graded multiple-choice quizzes). Finishing a level unlocks the next. The app tracks per-section/level completion, a day streak, and XP, in a friendly Duolingo-style UI.
+
+There is no assigned daily queue or scheduler — learning is self-directed, browse-and-pick, with difficulty progression.
 
 The 10 domains and their drills come from a source document (`docs/source.md`); seed data is derived from it.
 
@@ -64,38 +66,31 @@ almanac/
 
 Eight tables, split into a shared **catalog** (same for every user) and per-user **progress**. This split is what makes multi-user additive: the catalog stays global, progress keys on `user_id`. Keep it this small unless a feature needs more.
 
-A domain (= "section") holds ordered **lessons** (teaching units) and ordered **activities** (drills). Activities are either "confirm-you-did-it" tasks or auto-graded multiple-choice **quizzes**. Today's queue mixes lessons + activities.
+A domain (= "section") holds ordered **lessons** (teaching units) and ordered **activities** (drills), each tagged with a **level** (beginner / intermediate / advanced). Activities are either "confirm-you-did-it" tasks or auto-graded multiple-choice **quizzes**.
 
 Catalog (global):
-- **domain** — `id`, `slug`, `title`, `default_priority` (int; lower = higher; seed value only, user weights override), `core_idea` (text).
-- **lesson_fact** — `id`, `domain_id`, `title`, `body` (teaching prose), `order`. (Table name kept; represents a "lesson".)
-- **drill** — `id`, `domain_id`, `title`, `kind` (enum: `script` | `reflection` | `rehearsal` | `checklist` | `audit` | `record_review` | `confirm` | `quiz`), `est_minutes` (int), `instructions` (text). Quiz-only, nullable: `prompt` (text), `choices` (JSON list[str]), `answer_index` (int). The answer is never sent with the **question** (`DrillOut` omits `answer_index`), so it can't be seen before answering; grading is server-side and the graded result may reveal the answer as feedback.
+- **domain** — `id`, `slug`, `title`, `default_priority` (int; lower = higher; used only for display order on the home page), `core_idea` (text).
+- **lesson_fact** — `id`, `domain_id`, `level` (enum: `beginner` | `intermediate` | `advanced`), `title`, `body` (teaching prose), `order` (within `(domain, level)`). Table name kept; represents a "lesson".
+- **drill** — `id`, `domain_id`, `level` (same enum), `title`, `kind` (enum: `script` | `reflection` | `rehearsal` | `checklist` | `audit` | `record_review` | `confirm` | `quiz`), `est_minutes` (int), `instructions` (text), `order` (within `(domain, level)`). Quiz-only, nullable: `prompt` (text), `choices` (JSON list[str]), `answer_index` (int). The answer is never sent with the **question** (`DrillOut` omits `answer_index`); grading is server-side and the graded result may reveal the answer as feedback.
 - **source_ref** — `id`, `domain_id` (nullable), `url`, `title`, `fetched_at` (nullable), `cached_path` (nullable). Backs the `fetch` utility; not user-facing content.
 
 Progress (per user):
-- **user** — `id`, `handle`, `created_at`, `active_days_per_week` (default 7), `daily_items` (default 5, the primary daily goal), `daily_minutes` (default 15, info only). Seed exactly one row now (`id=1`). Today, `user_id` is hardcoded to 1 at the API boundary; multi-user later means resolving it from auth instead. Do not thread auth concerns deeper than that boundary.
-- **user_domain_pref** — `id`, `user_id`, `domain_id`, `weight` (float, the user's steering input), `active` (bool). This is how the user self-guides priorities. Absent row = use `default_priority`.
-- **drill_log** — `id`, `user_id`, `drill_id`, `logged_at` (datetime), `outcome` (enum: `done` | `skipped` | `snoozed`), `difficulty` (nullable int 1–3, set on `done` for confirm activities: 1 easy, 3 hard), `correct` (nullable bool, set on quiz answers), `note` (text, nullable). The event log everything derives from.
-- **fact_review** — `id`, `user_id`, `fact_id`, `reviewed_at` (datetime). Event log of a user marking a lesson reviewed ("learned"). Backs lesson coverage.
+- **user** — `id`, `handle`, `created_at`, `active_days_per_week` (default 7), `daily_minutes` / `daily_items` (legacy columns from the old daily-queue model; currently unused — safe to drop in a later migration). Seed exactly one row now (`id=1`). `user_id` is hardcoded to 1 at the API boundary; multi-user later means resolving it from auth instead.
+- **user_domain_pref** — `id`, `user_id`, `domain_id`, `weight` (float), `active` (bool). Legacy steering input from the scored-queue model; not currently read.
+- **drill_log** — `id`, `user_id`, `drill_id`, `logged_at` (datetime), `outcome` (enum: `done` | `skipped` | `snoozed`), `difficulty` (nullable int 1–3, set on `done` for confirm activities), `correct` (nullable bool, set on quiz answers), `note` (text, nullable). The event log activity progress derives from.
+- **fact_review** — `id`, `user_id`, `fact_id`, `reviewed_at` (datetime). Event log of a user marking a lesson "learned". Backs lesson progress.
 
-Streaks, coverage, and the daily queue are computed per user from these rows, not stored.
+Progression, gating, XP, and streaks are computed per user from these rows, not stored.
 
-## Scheduler / selection policy
+## Progression, gating & XP
 
-Self-guided: today's queue is scored and ranked per user, not pulled from a fixed rotation. The fixed loop is only a cold-start default and a config value (`active_days_per_week`, set to 7).
+Self-directed: the user picks a section, then works a level's items in order. There is **no scored daily queue and no scheduler** (removed in v3).
 
-- **Daily queue**: the queue mixes **lessons** (eligible until reviewed) and **activities**, scored, then packed by **item count** up to `daily_items` (not by minutes). Unreviewed lessons surface before activities. Always return at least one item (never an empty day). Score is a weighted sum of transparent factors:
-  - *neglect* — days since the user last logged anything in that domain (higher = more due),
-  - *priority* — the user's per-domain weight (from `user_domain_pref`); this is the steering input,
-  - *difficulty* — user rates each `done` confirm activity 1–3 (1 easy, 3 hard); hard ones resurface sooner, easy ones decay,
-  - *spacing* — suppress an activity done too recently (hard filter, cooldown window),
-  - *novelty* — small bonus for never-attempted activities.
-  Lessons score on neglect + priority only. Keep the weights as named constants at the top of `scheduler.py`. Do not hide them in the formula.
-- **Minimum-breadth floor**: any domain untouched for longer than a threshold is force-included regardless of its priority weight. This prevents the user steering into only comfortable domains and starving weak areas — the failure mode self-direction invites. Non-negotiable; keep it.
-- **Cold start**: before there's enough engagement (activity logs + lesson reviews) to score against, fall back to rotation order (lessons first by domain priority, then activities) trimmed to `daily_items`.
-- **Streak (per domain)**: consecutive active days with ≥1 completed drill in that domain. "Active day" respects `active_days_per_week` so a deliberate off day doesn't break it.
-- **Coverage (per domain)**: distinct lessons reviewed (`fact_review`) + distinct activities completed, over total. Resurface unreviewed lessons first.
-- Keep all of this in `scheduler.py` as pure functions taking (the user's log + their prefs + config + today's date) and returning the ranked queue. No DB or `datetime.now()` inside; pass them in. This is the most-tested module in the repo.
+- **Completion** — a lesson is complete when a `fact_review` exists; a confirm activity when a `done` `drill_log` exists; a **quiz when a `correct` answer has been logged** (retry until correct). A level is complete when all its items are complete.
+- **Gating** — beginner is unlocked if it has content; each later level unlocks once the previous level is complete. A level with no content yet is "coming soon" and blocks what follows. Enforced in `service.level_detail` (raises `BadRequestError`); the UI redirects locked/empty levels back to the section.
+- **XP** (computed, not stored) — `XP_LESSON`=10, `XP_ACTIVITY`=15, `XP_QUIZ`=20 per completed item; constants in `service.py`.
+- **Streak** — consecutive active days with ≥1 completed activity (any section). "Active day" respects `active_days_per_week`. Pure function in `metrics.py` (no DB, no wall-clock — date passed in); `metrics.py` is the most-tested module.
+- Progression/gating/XP live in `service.py` (DB-backed); keep the pure streak math in `metrics.py`.
 
 ## Content authoring format
 
@@ -107,31 +102,38 @@ slug: social-calibration
 title: Social calibration & nonverbal game
 default_priority: 1
 core_idea: You're training how you come across on default settings.
-lessons:
-  - title: First impressions form in seconds
-    body: |
-      Multi-paragraph teaching prose. Rendered on the domain page and surfaced in the
-      daily queue as a "Mark learned" card.
-activities:
-  - title: Mirror check          # confirm-style activity
-    kind: rehearsal
-    est_minutes: 2
-    instructions: Relaxed upright posture, neutral-friendly face, steady eye contact for two minutes.
-  - title: Quiz — the two judgment axes
-    kind: quiz
-    est_minutes: 1
-    prompt: Most social judgments collapse onto which two axes?
-    choices:
-      - Wealth and humor
-      - Warmth and competence
-      - Dominance and age
-    answer_index: 1
+levels:
+  beginner:
+    lessons:
+      - title: First impressions form in seconds
+        body: |
+          Multi-paragraph teaching prose, rendered as a "Mark learned" card.
+    activities:
+      - title: Mirror check          # confirm-style activity
+        kind: rehearsal
+        est_minutes: 2
+        instructions: Relaxed upright posture, neutral-friendly face, steady eye contact.
+      - title: Quiz — the two judgment axes
+        kind: quiz
+        est_minutes: 1
+        prompt: Most social judgments collapse onto which two axes?
+        choices:
+          - Wealth and humor
+          - Warmth and competence
+          - Dominance and age
+        answer_index: 1
+  intermediate:
+    lessons: [ ... ]
+    activities: [ ... ]
+  advanced:
+    lessons: [ ... ]
+    activities: [ ... ]
 ---
-
-Optional prose notes for this domain go here. Not required.
 ```
 
-`lessons` carry `title` + `body` (prose). `activities` with `kind: quiz` require `prompt`, `choices` (≥2), and a valid `answer_index`; every other kind requires `instructions`. `seed.py` must be idempotent: re-running updates existing rows (lessons match on `(domain, order)`, activities on `(domain, title)`) rather than duplicating, and never deletes `drill_log` / `fact_review` history.
+Frontmatter requires a `levels:` mapping (`beginner` / `intermediate` / `advanced`); each level has ordered `lessons` (`title` + prose `body`) and `activities`. A level may be omitted or empty ("coming soon"). `activities` with `kind: quiz` require `prompt`, `choices` (≥2), and a valid `answer_index`; every other kind requires `instructions`. `seed.py` must be idempotent: re-running updates existing rows (lessons match on `(domain, level, order)`, activities on `(domain, title)`) rather than duplicating, and never deletes `drill_log` / `fact_review` history.
+
+**Content status:** Social calibration and Conflict/negotiation are fully authored across all three levels; the other eight sections currently have beginner-level content only (intermediate/advanced are "coming soon" until written).
 
 ## Build / run / test
 
@@ -154,9 +156,9 @@ The UI is served by the same `uvicorn` process (Jinja + HTMX); there is no separ
 ## Coding conventions
 
 - Type hints everywhere; functions that touch the DB take a `Session` argument rather than opening their own.
-- Scheduler/streak logic stays pure and unit-tested; no DB or `datetime.now()` inside — pass the date in.
-- Pydantic schemas separate from SQLAlchemy models; do not return ORM objects from routes.
-- No business logic in routes; routes call functions in `scheduler.py` / a thin service layer.
+- Streak logic stays pure and unit-tested in `metrics.py`; no DB or `datetime.now()` inside — pass the date in.
+- Pydantic schemas separate from SQLAlchemy models; do not return ORM objects from JSON routes.
+- No business logic in routes; routes call the thin `service.py` layer.
 - Errors: raise typed exceptions, map to HTTP in one place.
 - UI: routes return rendered Jinja templates (full page) or HTML fragments (HTMX swaps). Keep templates logic-light; the server owns truth. No client-side state store.
 
@@ -164,19 +166,21 @@ The UI is served by the same `uvicorn` process (Jinja + HTMX); there is no separ
 
 - **Plan before editing.** For anything beyond a one-file change, state the plan and which files you'll touch, then proceed.
 - **Small commits**, one concern each. Conventional messages.
-- **Tests with logic.** New scheduler/streak behavior ships with a `pytest` case. Run `pytest` and `ruff` before claiming done.
+- **Tests with logic.** New progression/gating/streak behavior ships with a `pytest` case. Run `pytest` and `ruff` before claiming done.
 - **No silent dependencies.** Adding a package requires a one-line reason. Prefer the standard library and what's already here.
 - **Don't expand the data model or add a service** without saying why it's needed and getting a yes.
 - **Respect the scraping decision.** Do not build a general crawler or wire fetched pages into user-facing content.
 - **Idempotent seeds and reversible migrations** — never write a migration or seed that can drop `drill_log`.
 - If a requirement is ambiguous, ask one specific question rather than guessing across several files.
 
-## Build order (milestones)
+## Build status
 
-1. Schema + Alembic migration + `seed.py`, with `content/` authored from `docs/source.md`. Verify a clean DB seeds correctly and re-seeds without duplicating.
-2. API: domains/lessons/drills read endpoints, `POST /logs` to record a completion, `GET /today` for the queue. Scheduler logic unit-tested.
-3. Dashboard UI: today's queue with check-off, per-domain streak and coverage, a domain detail view.
-4. (Optional) `fetch` utility + `source_ref` management, used only to assist authoring.
+Shipped: schema + idempotent seed; catalog/logs/quiz API; gamified browse-and-pick UI (home → section → level) with gated levels, XP, day streak, lessons + auto-graded quizzes. The earlier scored-daily-queue scheduler was built then **removed in v3** in favor of self-directed progression.
+
+Remaining / optional:
+- Author intermediate + advanced content for the eight beginner-only sections.
+- (Optional) `fetch` utility + `source_ref` management, used only to assist authoring.
+- Drop the unused legacy columns (`user.daily_minutes`/`daily_items`, `user_domain_pref`) in a cleanup migration.
 
 ## Path to multi-user
 
@@ -208,12 +212,14 @@ Deferred, not forbidden — planned for multi-user, see Path to multi-user: auth
 ## Decisions log
 
 - Stack is Python end-to-end: FastAPI + Jinja + HTMX, SQLite, uv. No React, no separate frontend build.
-- `active_days_per_week` default = 7. **Daily goal is item count (`daily_items`, default 5), not minutes** — `daily_minutes` (15) is retained as info only.
-- Content is structured per domain as **lessons** (teaching prose, reviewed/"learned") then **activities**. Activities are confirm-you-did-it tasks or auto-graded multiple-choice **quizzes** (`prompt`/`choices`/`answer_index`; the question payload omits the answer so it can't be seen before answering, graded server-side, result reveals it as feedback).
-- Scheduler is a self-guided scoring policy with a minimum-breadth floor, not a fixed rotation. The queue mixes lessons + activities, surfaces unreviewed lessons first, and packs by item count up to `daily_items`, never empty.
-- Difficulty scale is 1–3 (1 easy, 3 hard), set on `done` for confirm activities; quizzes record `correct` instead.
-- Build order: ship the tracker (milestones 1–3) before the Phase 2 discovery layer.
+- **v3 model: browse-and-pick, not assigned.** The user chooses a section and progresses through gated levels (beginner → intermediate → advanced). The earlier scored daily queue + `scheduler.py` were removed; `user.daily_*` and `user_domain_pref` are now-unused legacy columns.
+- Content is structured per domain as **levels**, each with **lessons** (teaching prose, marked "learned") then **activities** (confirm-you-did-it tasks or auto-graded multiple-choice **quizzes**). Quiz answer is server-side; the question payload omits it; the result reveals it as feedback.
+- **Gating**: a level unlocks once the previous is complete (all items done; quiz needs a correct answer). Empty levels are "coming soon".
+- **Gamified**: day streak + XP (lesson 10 / activity 15 / quiz 20, computed) + per-level progress, Duolingo-style UI.
+- Difficulty scale 1–3 (1 easy, 3 hard) recorded on confirm-activity `done`; quizzes record `correct` instead.
+- Teachings stay high-level and accessible but useful; sections span multiple levels so they take real time.
 
 ## Open questions
 
-1. Phase 2 discovery layer — document its section in this file now, or after milestones 1–3 ship? (Recommendation: after.)
+1. Should completed sections suggest a "next section" or stay purely browse-driven? (Currently: pure browse.)
+2. Add explicit gamification beyond XP/streak (badges, daily XP goal) — worth it for a single user?

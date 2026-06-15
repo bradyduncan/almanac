@@ -1,0 +1,43 @@
+{% if a.done %}
+<div class="card item activity logged" id="item-drill-{{ a.drill.id }}">
+  <div class="card-head"><span class="type-tag">{% if a.is_quiz %}Quiz{% else %}{{ a.drill.kind.value }}{% endif %}</span></div>
+  <h3>{{ a.drill.title }}</h3>
+  <p class="logged-state">✓ Done</p>
+</div>
+
+{% elif a.is_quiz %}
+<div class="card item activity quiz" id="item-drill-{{ a.drill.id }}">
+  <div class="card-head"><span class="type-tag">Quiz</span></div>
+  <form hx-post="/ui/quiz-answer" hx-target="#item-drill-{{ a.drill.id }}" hx-swap="outerHTML">
+    <input type="hidden" name="drill_id" value="{{ a.drill.id }}">
+    <p class="prompt">{{ a.drill.prompt }}</p>
+    <div class="choices">
+      {% for c in a.choices %}
+      <label class="choice"><input type="radio" name="choice_index" value="{{ loop.index0 }}" required> {{ c }}</label>
+      {% endfor %}
+    </div>
+    <button type="submit">Check</button>
+  </form>
+</div>
+
+{% else %}
+<div class="card item activity confirm" id="item-drill-{{ a.drill.id }}">
+  <div class="card-head">
+    <span class="type-tag">{{ a.drill.kind.value }}</span>
+    <span class="mins">{{ a.drill.est_minutes }} min</span>
+  </div>
+  <h3>{{ a.drill.title }}</h3>
+  <p class="instructions">{{ a.drill.instructions }}</p>
+  <div class="actions">
+    <span class="label">How was it?</span>
+    <button hx-post="/ui/drill-log" hx-vals='{"drill_id": {{ a.drill.id }}, "outcome": "done", "difficulty": 1}'
+            hx-target="#item-drill-{{ a.drill.id }}" hx-swap="outerHTML">Easy</button>
+    <button hx-post="/ui/drill-log" hx-vals='{"drill_id": {{ a.drill.id }}, "outcome": "done", "difficulty": 2}'
+            hx-target="#item-drill-{{ a.drill.id }}" hx-swap="outerHTML">OK</button>
+    <button hx-post="/ui/drill-log" hx-vals='{"drill_id": {{ a.drill.id }}, "outcome": "done", "difficulty": 3}'
+            hx-target="#item-drill-{{ a.drill.id }}" hx-swap="outerHTML">Hard</button>
+    <button class="ghost" hx-post="/ui/drill-log" hx-vals='{"drill_id": {{ a.drill.id }}, "outcome": "skipped"}'
+            hx-target="#item-drill-{{ a.drill.id }}" hx-swap="outerHTML">Skip</button>
+  </div>
+</div>
+{% endif %}

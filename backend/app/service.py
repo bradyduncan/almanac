@@ -1,21 +1,21 @@
 """Thin service layer between routes and the DB.
 
 Routes hold no business logic; they call these functions. Functions take a Session
-(they never open their own). Scheduler scoring stays in scheduler.py; this module only
-loads rows, maps them into the scheduler's plain inputs, and persists writes.
+(they never open their own). Streak math stays pure in metrics.py; this module loads
+rows, computes section/level progression + gating + XP, and persists writes.
 """
 
 from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app import metrics
-from app import scheduler as sch
 from app.exceptions import BadRequestError, NotFoundError
 from app.models import (
+    LEVEL_ORDER,
     Domain,
     Drill,
     DrillKind,
@@ -24,9 +24,13 @@ from app.models import (
     LessonFact,
     LogOutcome,
     User,
-    UserDomainPref,
 )
 from app.schemas import LogCreate
+
+# XP awarded per completed item (computed, not stored).
+XP_LESSON = 10
+XP_ACTIVITY = 15
+XP_QUIZ = 20
 
 # The single API-boundary seam for identity. Multi-user later = resolve this from auth
 # instead of hardcoding. Nothing below this line should care where the id came from.
@@ -123,94 +127,6 @@ def grade_quiz(
     return drill, correct
 
 
-# --------------------------------------------------------------------------- #
-# Progress: streaks + coverage (per domain)
-# --------------------------------------------------------------------------- #
-
-
-def _done_dates_by_domain(session: Session, user_id: int) -> dict[int, list[date]]:
-    """Dates with >=1 completed drill, grouped by domain."""
-    rows = session.execute(
-        select(Drill.domain_id, DrillLog.logged_at)
-        .join(Drill, Drill.id == DrillLog.drill_id)
-        .where(DrillLog.user_id == user_id, DrillLog.outcome == LogOutcome.done)
-    ).all()
-    out: dict[int, list[date]] = {}
-    for domain_id, logged_at in rows:
-        out.setdefault(domain_id, []).append(logged_at.date())
-    return out
-
-
-def _done_drill_ids_by_domain(session: Session, user_id: int) -> dict[int, set[int]]:
-    rows = session.execute(
-        select(Drill.domain_id, DrillLog.drill_id)
-        .join(Drill, Drill.id == DrillLog.drill_id)
-        .where(DrillLog.user_id == user_id, DrillLog.outcome == LogOutcome.done)
-    ).all()
-    out: dict[int, set[int]] = {}
-    for domain_id, drill_id in rows:
-        out.setdefault(domain_id, set()).add(drill_id)
-    return out
-
-
-def _reviewed_fact_ids_by_domain(session: Session, user_id: int) -> dict[int, set[int]]:
-    rows = session.execute(
-        select(LessonFact.domain_id, FactReview.fact_id)
-        .join(LessonFact, LessonFact.id == FactReview.fact_id)
-        .where(FactReview.user_id == user_id)
-    ).all()
-    out: dict[int, set[int]] = {}
-    for domain_id, fact_id in rows:
-        out.setdefault(domain_id, set()).add(fact_id)
-    return out
-
-
-def domain_progress(session: Session, user_id: int, today: date) -> list[dict]:
-    """Per-domain streak + coverage for every domain, in priority order."""
-    user = _load_user(session, user_id)
-    domains = list(session.scalars(select(Domain).order_by(Domain.default_priority)))
-
-    fact_totals: dict[int, int] = dict(
-        session.execute(
-            select(LessonFact.domain_id, func.count()).group_by(LessonFact.domain_id)
-        ).all()
-    )
-    drill_totals: dict[int, int] = dict(
-        session.execute(select(Drill.domain_id, func.count()).group_by(Drill.domain_id)).all()
-    )
-
-    done_dates = _done_dates_by_domain(session, user_id)
-    done_ids = _done_drill_ids_by_domain(session, user_id)
-    reviewed_ids = _reviewed_fact_ids_by_domain(session, user_id)
-
-    result = []
-    for d in domains:
-        streak = metrics.domain_streak(done_dates.get(d.id, []), user.active_days_per_week, today)
-        coverage = metrics.domain_coverage(
-            facts_total=fact_totals.get(d.id, 0),
-            facts_reviewed=len(reviewed_ids.get(d.id, set())),
-            drills_total=drill_totals.get(d.id, 0),
-            drills_done=len(done_ids.get(d.id, set())),
-        )
-        result.append({"domain": d, "streak": streak, "coverage": coverage})
-    return result
-
-
-def domain_detail_progress(session: Session, user_id: int, slug: str) -> dict:
-    """Domain with its facts (reviewed flag) and drills (done flag) for the detail view."""
-    domain = get_domain_detail(session, slug)
-    reviewed = _reviewed_fact_ids_by_domain(session, user_id).get(domain.id, set())
-    done = _done_drill_ids_by_domain(session, user_id).get(domain.id, set())
-    facts = [{"fact": f, "reviewed": f.id in reviewed} for f in domain.facts]
-    drills = [{"drill": dr, "done": dr.id in done} for dr in domain.drills]
-    return {"domain": domain, "facts": facts, "drills": drills}
-
-
-# --------------------------------------------------------------------------- #
-# Today's queue
-# --------------------------------------------------------------------------- #
-
-
 def _load_user(session: Session, user_id: int) -> User:
     user = session.get(User, user_id)
     if user is None:
@@ -218,53 +134,174 @@ def _load_user(session: Session, user_id: int) -> User:
     return user
 
 
-def build_today(session: Session, user_id: int, today: date) -> dict:
-    """Load rows, run the pure scheduler, return everything routes need to render.
+# --------------------------------------------------------------------------- #
+# Progression: sections -> levels -> gating -> XP
+# --------------------------------------------------------------------------- #
 
-    Returns: {goal, scored (list[ScoredItem]), drill_by_id, lesson_by_id,
-    domain_title_by_id}.
-    """
-    user = _load_user(session, user_id)
 
-    domains = list(session.scalars(select(Domain)))
-    drills = list(session.scalars(select(Drill)))
-    lessons = list(session.scalars(select(LessonFact)))
-    prefs = list(session.scalars(select(UserDomainPref).where(UserDomainPref.user_id == user_id)))
-    logs = list(session.scalars(select(DrillLog).where(DrillLog.user_id == user_id)))
-    reviewed = set(session.scalars(select(FactReview.fact_id).where(FactReview.user_id == user_id)))
+def _reviewed_lesson_ids(session: Session, user_id: int) -> set[int]:
+    return set(session.scalars(select(FactReview.fact_id).where(FactReview.user_id == user_id)))
 
-    drill_by_id = {d.id: d for d in drills}
-    lesson_by_id = {lsn.id: lsn for lsn in lessons}
-    domain_title_by_id = {d.id: d.title for d in domains}
 
-    scored = sch.build_queue(
-        lessons=[sch.LessonInfo(lsn.id, lsn.domain_id, lsn.order) for lsn in lessons],
-        drills=[sch.DrillInfo(d.id, d.domain_id, d.est_minutes) for d in drills],
-        domains=[sch.DomainInfo(d.id, d.default_priority) for d in domains],
-        prefs=[sch.PrefInfo(p.domain_id, p.weight, p.active) for p in prefs],
-        logs=[
-            sch.LogEntry(
-                drill_id=lg.drill_id,
-                domain_id=drill_by_id[lg.drill_id].domain_id,
-                logged_at=lg.logged_at,
-                outcome=str(lg.outcome),
-                difficulty=lg.difficulty,
+def _completed_activity_split(session: Session, user_id: int) -> tuple[set[int], set[int]]:
+    """(confirm activities completed, quizzes answered correctly)."""
+    done_confirm = set(
+        session.scalars(
+            select(DrillLog.drill_id)
+            .join(Drill, Drill.id == DrillLog.drill_id)
+            .where(
+                DrillLog.user_id == user_id,
+                DrillLog.outcome == LogOutcome.done,
+                Drill.kind != DrillKind.quiz,
             )
-            for lg in logs
-            if lg.drill_id in drill_by_id
-        ],
-        reviewed_lesson_ids=reviewed,
-        config=sch.Config(
-            daily_items=user.daily_items,
-            active_days_per_week=user.active_days_per_week,
-        ),
-        today=today,
+        )
     )
+    correct_quiz = set(
+        session.scalars(
+            select(DrillLog.drill_id).where(DrillLog.user_id == user_id, DrillLog.correct.is_(True))
+        )
+    )
+    return done_confirm, correct_quiz
+
+
+def compute_xp(reviewed: set[int], done_confirm: set[int], correct_quiz: set[int]) -> int:
+    return len(reviewed) * XP_LESSON + len(done_confirm) * XP_ACTIVITY + len(correct_quiz) * XP_QUIZ
+
+
+def _level_states(domain: Domain, reviewed: set[int], completed: set[int]) -> list[dict]:
+    """Per-level progress + gating for one domain. A level unlocks once the previous
+    level is complete; an empty level is 'coming soon' and blocks what follows."""
+    states: list[dict] = []
+    prev_complete = True
+    for level in LEVEL_ORDER:
+        lvl = level.value
+        lessons = [f for f in domain.facts if str(f.level) == lvl]
+        drills = [d for d in domain.drills if str(d.level) == lvl]
+        total = len(lessons) + len(drills)
+        done = sum(1 for f in lessons if f.id in reviewed) + sum(
+            1 for d in drills if d.id in completed
+        )
+        available = total > 0
+        complete = available and done == total
+        states.append(
+            {
+                "level": lvl,
+                "total": total,
+                "done": done,
+                "ratio": (done / total) if total else 0.0,
+                "available": available,
+                "complete": complete,
+                "unlocked": available and prev_complete,
+            }
+        )
+        prev_complete = complete
+    return states
+
+
+def sections_overview(session: Session, user_id: int, today: date) -> dict:
+    """Homepage data: global XP + streak and a per-section completion summary."""
+    user = _load_user(session, user_id)
+    domains = list(
+        session.scalars(
+            select(Domain)
+            .order_by(Domain.default_priority)
+            .options(selectinload(Domain.facts), selectinload(Domain.drills))
+        )
+    )
+    reviewed = _reviewed_lesson_ids(session, user_id)
+    done_confirm, correct_quiz = _completed_activity_split(session, user_id)
+    completed = done_confirm | correct_quiz
+
+    all_done_dates = [
+        lg.date()
+        for lg in session.scalars(
+            select(DrillLog.logged_at).where(
+                DrillLog.user_id == user_id, DrillLog.outcome == LogOutcome.done
+            )
+        )
+    ]
+    streak = metrics.domain_streak(all_done_dates, user.active_days_per_week, today)
+
+    sections = []
+    for d in domains:
+        levels = _level_states(d, reviewed, completed)
+        total = sum(lv["total"] for lv in levels)
+        done = sum(lv["done"] for lv in levels)
+        sections.append(
+            {
+                "domain": d,
+                "levels": levels,
+                "total": total,
+                "done": done,
+                "ratio": (done / total) if total else 0.0,
+            }
+        )
 
     return {
-        "goal": user.daily_items,
-        "scored": scored,
-        "drill_by_id": drill_by_id,
-        "lesson_by_id": lesson_by_id,
-        "domain_title_by_id": domain_title_by_id,
+        "xp": compute_xp(reviewed, done_confirm, correct_quiz),
+        "streak": streak,
+        "sections": sections,
+    }
+
+
+def header_stats(session: Session, user_id: int, today: date) -> dict:
+    """Lightweight XP + streak for the top bar on every page."""
+    user = _load_user(session, user_id)
+    reviewed = _reviewed_lesson_ids(session, user_id)
+    done_confirm, correct_quiz = _completed_activity_split(session, user_id)
+    dates = [
+        lg.date()
+        for lg in session.scalars(
+            select(DrillLog.logged_at).where(
+                DrillLog.user_id == user_id, DrillLog.outcome == LogOutcome.done
+            )
+        )
+    ]
+    return {
+        "xp": compute_xp(reviewed, done_confirm, correct_quiz),
+        "streak": metrics.domain_streak(dates, user.active_days_per_week, today),
+    }
+
+
+def section_detail(session: Session, user_id: int, slug: str) -> dict:
+    """Section page: levels with lock state + per-level progress."""
+    domain = get_domain_detail(session, slug)
+    reviewed = _reviewed_lesson_ids(session, user_id)
+    done_confirm, correct_quiz = _completed_activity_split(session, user_id)
+    levels = _level_states(domain, reviewed, done_confirm | correct_quiz)
+    return {"domain": domain, "levels": levels}
+
+
+def level_detail(session: Session, user_id: int, slug: str, level: str) -> dict:
+    """Level page: ordered lessons + activities with completion flags. Enforces gating."""
+    if level not in {lvl.value for lvl in LEVEL_ORDER}:
+        raise NotFoundError("level", level)
+    domain = get_domain_detail(session, slug)
+    reviewed = _reviewed_lesson_ids(session, user_id)
+    done_confirm, correct_quiz = _completed_activity_split(session, user_id)
+    completed = done_confirm | correct_quiz
+
+    states = _level_states(domain, reviewed, completed)
+    state = next(s for s in states if s["level"] == level)
+    if not state["available"]:
+        raise BadRequestError(f"level '{level}' has no content yet")
+    if not state["unlocked"]:
+        raise BadRequestError(f"level '{level}' is locked; finish the previous level first")
+
+    lessons = sorted((f for f in domain.facts if str(f.level) == level), key=lambda f: f.order)
+    drills = sorted((d for d in domain.drills if str(d.level) == level), key=lambda d: d.order)
+    lesson_views = [{"lesson": f, "reviewed": f.id in reviewed} for f in lessons]
+    drill_views = [{"drill": d, "done": d.id in completed} for d in drills]
+
+    # the next level, if this one is complete and the next is available
+    idx = [lvl.value for lvl in LEVEL_ORDER].index(level)
+    next_state = states[idx + 1] if idx + 1 < len(states) else None
+
+    return {
+        "domain": domain,
+        "level": level,
+        "state": state,
+        "lessons": lesson_views,
+        "drills": drill_views,
+        "next": next_state,
     }

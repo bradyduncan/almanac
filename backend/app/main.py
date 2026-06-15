@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.exceptions import AppError, NotFoundError
-from app.routers import catalog, logs, today, ui
+from app.routers import catalog, logs, ui
 
 app = FastAPI(title="Almanac", version="0.1.0")
 
@@ -22,7 +22,6 @@ app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 app.include_router(ui.router)
 app.include_router(catalog.router)
 app.include_router(logs.router)
-app.include_router(today.router)
 
 
 @app.exception_handler(NotFoundError)

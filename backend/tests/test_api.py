@@ -22,8 +22,8 @@ def test_domain_detail_includes_facts_and_drills(client: TestClient) -> None:
     assert resp.status_code == 200
     data = resp.json()
     assert data["slug"] == "social-calibration"
-    assert len(data["facts"]) == 2  # lessons
-    assert len(data["drills"]) == 5  # 3 confirm + 2 quiz
+    assert len(data["facts"]) == 6  # lessons across beginner/intermediate/advanced
+    assert len(data["drills"]) == 9  # activities across all three levels
     assert {d["kind"] for d in data["drills"]} <= {
         "script",
         "reflection",
@@ -77,37 +77,8 @@ def test_post_log_unknown_drill_404(client: TestClient) -> None:
     assert resp.status_code == 404
 
 
-def test_today_returns_queue(client: TestClient) -> None:
-    resp = client.get("/today")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["goal"] == 5
-    assert len(data["items"]) >= 1  # never empty
-    # cold start at first run -> items carry the cold_start factor
-    assert all("cold_start" in it["factors"] for it in data["items"])
-    item = data["items"][0]
-    assert item["kind"] in {"lesson", "activity"}
-    assert "domain_title" in item
-
-
-def test_today_lessons_surface_first(client: TestClient) -> None:
-    data = client.get("/today").json()
-    # lessons fill the count goal before activities
-    assert any(it["kind"] == "lesson" for it in data["items"])
-    kinds = [it["kind"] for it in data["items"]]
-    assert kinds == sorted(kinds, key=lambda k: k != "lesson")
-
-
-def test_today_reflects_logged_completion(client: TestClient) -> None:
-    # Log enough completions to leave cold start, then today's queue should be scored.
-    for drill_id in range(1, 7):
-        client.post("/logs", json={"drill_id": drill_id, "outcome": "done", "difficulty": 2})
-    data = client.get("/today").json()
-    assert all("cold_start" not in it["factors"] for it in data["items"])
-
-
 # --------------------------------------------------------------------------- #
-# Fact reviews + progress
+# Fact reviews
 # --------------------------------------------------------------------------- #
 
 
@@ -122,28 +93,48 @@ def test_post_fact_review_unknown_404(client: TestClient) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# UI (HTML + HTMX fragments)
+# UI (HTML pages + HTMX fragments)
 # --------------------------------------------------------------------------- #
 
 
-def test_dashboard_renders(client: TestClient) -> None:
+def test_home_renders_paths(client: TestClient) -> None:
     resp = client.get("/")
     assert resp.status_code == 200
     assert "text/html" in resp.headers["content-type"]
-    assert "Today" in resp.text
-    assert "Domains" in resp.text
+    assert "what do you want" in resp.text.lower()
+    assert "Social calibration" in resp.text
+    assert "XP" in resp.text  # gamified top bar
 
 
-def test_domain_detail_page_renders(client: TestClient) -> None:
+def test_section_page_shows_levels(client: TestClient) -> None:
     resp = client.get("/d/social-calibration")
     assert resp.status_code == 200
-    assert "What to know" in resp.text
-    assert "Activities" in resp.text
-    assert "Mark learned" in resp.text  # lessons start unreviewed
+    assert "Beginner" in resp.text
+    assert "Intermediate" in resp.text
+    assert "Advanced" in resp.text
+
+
+def test_beginner_level_opens(client: TestClient) -> None:
+    resp = client.get("/d/social-calibration/beginner")
+    assert resp.status_code == 200
+    assert "Learn" in resp.text and "Practice" in resp.text
+    assert "Mark learned" in resp.text
+
+
+def test_locked_level_redirects_to_section(client: TestClient) -> None:
+    # intermediate is locked until beginner is complete
+    resp = client.get("/d/social-calibration/intermediate", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"].endswith("/d/social-calibration")
+
+
+def test_coming_soon_level_redirects(client: TestClient) -> None:
+    # stub sections have no intermediate content
+    resp = client.get("/d/health/intermediate", follow_redirects=False)
+    assert resp.status_code == 303
 
 
 def test_ui_drill_log_returns_logged_fragment(client: TestClient) -> None:
-    # drill 1 is a confirm-style activity (Mirror check)
     resp = client.post("/ui/drill-log", data={"drill_id": 1, "outcome": "done", "difficulty": 3})
     assert resp.status_code == 200
     assert "✓ Done" in resp.text
@@ -154,16 +145,6 @@ def test_ui_fact_review_marks_reviewed(client: TestClient) -> None:
     resp = client.post("/ui/fact-review", data={"fact_id": 1})
     assert resp.status_code == 200
     assert "✓ reviewed" in resp.text
-    # and the domain detail now shows it reviewed
-    detail = client.get("/d/social-calibration").text
-    assert "✓ reviewed" in detail
-
-
-def test_domain_progress_after_review_and_log(client: TestClient) -> None:
-    client.post("/fact-reviews", json={"fact_id": 1})
-    client.post("/logs", json={"drill_id": 1, "outcome": "done", "difficulty": 2})
-    page = client.get("/").text
-    assert "% covered" in page
 
 
 # --------------------------------------------------------------------------- #

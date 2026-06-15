@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}{{ domain.title }} — Almanac{% endblock %}
+{% block content %}
+<a href="/" class="back">← All paths</a>
+<section class="section-head-block">
+  <h1>{{ domain.title }}</h1>
+  <p class="sub">{{ domain.core_idea }}</p>
+</section>
+
+<div class="levels">
+  {% for lv in levels %}
+  <div class="level-card {% if lv.complete %}complete{% elif not lv.unlocked %}locked{% endif %}">
+    <div class="level-main">
+      <span class="level-name">{{ lv.level | capitalize }}</span>
+      {% if not lv.available %}
+        <span class="level-state muted">Coming soon</span>
+      {% elif lv.complete %}
+        <span class="level-state good">✓ Complete</span>
+      {% elif not lv.unlocked %}
+        <span class="level-state muted">🔒 Locked</span>
+      {% else %}
+        <span class="level-state">{{ lv.done }}/{{ lv.total }}</span>
+      {% endif %}
+    </div>
+    {% if lv.available %}
+    <div class="level-bar"><div class="level-fill" style="width: {{ (lv.ratio * 100) | int }}%"></div></div>
+    {% endif %}
+    {% if lv.available and lv.unlocked %}
+      <a class="btn start" href="/d/{{ domain.slug }}/{{ lv.level }}">
+        {% if lv.complete %}Review{% elif lv.done > 0 %}Continue{% else %}Start{% endif %}
+      </a>
+    {% else %}
+      <span class="btn disabled">{% if not lv.available %}—{% else %}Locked{% endif %}</span>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}

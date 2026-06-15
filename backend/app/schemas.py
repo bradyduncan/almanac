@@ -7,7 +7,7 @@ these. Read models use from_attributes so they can be built with `model_validate
 from __future__ import annotations
 
 import json
-from datetime import date, datetime
+from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -119,25 +119,3 @@ class QuizResult(BaseModel):
     correct: bool
     chosen_index: int
     answer_index: int
-
-
-# --------------------------------------------------------------------------- #
-# Today's queue
-# --------------------------------------------------------------------------- #
-
-
-class QueueItemOut(BaseModel):
-    kind: str  # "lesson" | "activity"
-    domain_title: str
-    score: float
-    forced: bool
-    factors: dict[str, float]
-    lesson: LessonFactOut | None = None
-    drill: DrillOut | None = None
-
-
-class TodayOut(BaseModel):
-    day: date
-    goal: int
-    queued: int
-    items: list[QueueItemOut]

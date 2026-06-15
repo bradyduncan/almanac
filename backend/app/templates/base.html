@@ -9,7 +9,11 @@
 </head>
 <body>
   <header class="topbar">
-    <a href="/" class="brand">Almanac</a>
+    <a href="/" class="brand">🧭 Almanac</a>
+    <div class="stats">
+      <span class="stat streak" title="Day streak">🔥 {{ streak | default(0) }}</span>
+      <span class="stat xp" title="Total XP">⭐ {{ xp | default(0) }} XP</span>
+    </div>
   </header>
   <main>
     {% block content %}{% endblock %}
